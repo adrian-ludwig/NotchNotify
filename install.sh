@@ -14,6 +14,7 @@ sleep 0.3
 echo "Installing binaries to /usr/local/bin..."
 sudo cp .build/release/notch /usr/local/bin/notch
 sudo cp .build/release/NotchNotifyApp /usr/local/bin/NotchNotifyApp
+sudo chmod 755 /usr/local/bin/notch /usr/local/bin/NotchNotifyApp
 
 echo "Sending test notification (server auto-starts on first use)..."
 notch "NotchNotify installed" \

@@ -103,14 +103,15 @@ struct CLI {
         let serverURL = resolved.deletingLastPathComponent().appendingPathComponent("NotchNotifyApp")
         guard FileManager.default.isExecutableFile(atPath: serverURL.path) else { return }
 
-        // Use `open` so macOS grants window-server access via Launch Services
+        // Shell-fork so server detaches like `binary &` in a shell script
         let p = Process()
-        p.executableURL = URL(fileURLWithPath: "/usr/bin/open")
-        p.arguments = [serverURL.path]
+        p.executableURL = URL(fileURLWithPath: "/bin/sh")
+        p.arguments = ["-c", "\"\(serverURL.path)\" &"]
         p.standardInput = FileHandle.nullDevice
         p.standardOutput = FileHandle.nullDevice
         p.standardError = FileHandle.nullDevice
         try? p.run()
+        p.waitUntilExit()
 
         // Wait up to 5s for socket
         for _ in 0..<50 {
