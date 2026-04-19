@@ -103,15 +103,17 @@ struct CLI {
         let serverURL = resolved.deletingLastPathComponent().appendingPathComponent("NotchNotifyApp")
         guard FileManager.default.isExecutableFile(atPath: serverURL.path) else { return }
 
+        // Use `open` so macOS grants window-server access via Launch Services
         let p = Process()
-        p.executableURL = serverURL
+        p.executableURL = URL(fileURLWithPath: "/usr/bin/open")
+        p.arguments = [serverURL.path]
         p.standardInput = FileHandle.nullDevice
         p.standardOutput = FileHandle.nullDevice
         p.standardError = FileHandle.nullDevice
         try? p.run()
 
-        // Wait up to 3s for socket
-        for _ in 0..<30 {
+        // Wait up to 5s for socket
+        for _ in 0..<50 {
             usleep(100_000)
             if canConnect() { return }
         }
@@ -183,7 +185,7 @@ struct CLI {
         OPTIONS:
           -s, --subtitle TEXT     Small secondary line under the title
           -b, --body TEXT         Longer description
-          -i, --image VALUE       Image path (png/jpg) or SF Symbol (sf:bell.fill)
+          -i, --image VALUE       Emoji 🚀, file path, https:// URL, or sf:symbol.name
           -a, --actions A,B,C     Comma-separated action buttons
           -t, --timeout SECS      Auto-dismiss after N seconds
               --style glass|solid Visual style (default: glass)
