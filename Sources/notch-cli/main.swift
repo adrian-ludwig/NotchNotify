@@ -77,8 +77,10 @@ struct CLI {
             accentHex: accent
         )
 
+        ensureServerRunning()
+
         guard let response = send(req) else {
-            FileHandle.standardError.write(Data("Could not reach NotchNotify app. Is it running?\n".utf8))
+            FileHandle.standardError.write(Data("Could not reach NotchNotify app.\n".utf8))
             return 3
         }
 
@@ -90,6 +92,49 @@ struct CLI {
         if response.dismissed { return 2 }
         if let action = response.action, let first = actions.first, action == first { return 0 }
         return 1
+    }
+
+    static func ensureServerRunning() {
+        guard !canConnect() else { return }
+
+        // Find NotchNotifyApp next to this binary (resolve symlinks first)
+        let selfPath = CommandLine.arguments[0]
+        let resolved = URL(fileURLWithPath: selfPath).resolvingSymlinksInPath()
+        let serverURL = resolved.deletingLastPathComponent().appendingPathComponent("NotchNotifyApp")
+        guard FileManager.default.isExecutableFile(atPath: serverURL.path) else { return }
+
+        let p = Process()
+        p.executableURL = serverURL
+        p.standardInput = FileHandle.nullDevice
+        p.standardOutput = FileHandle.nullDevice
+        p.standardError = FileHandle.nullDevice
+        try? p.run()
+
+        // Wait up to 3s for socket
+        for _ in 0..<30 {
+            usleep(100_000)
+            if canConnect() { return }
+        }
+    }
+
+    static func canConnect() -> Bool {
+        let fd = socket(AF_UNIX, SOCK_STREAM, 0)
+        guard fd >= 0 else { return false }
+        defer { close(fd) }
+        var addr = sockaddr_un()
+        addr.sun_family = sa_family_t(AF_UNIX)
+        let cap = MemoryLayout.size(ofValue: addr.sun_path)
+        _ = SocketPath.path.withCString { src in
+            withUnsafeMutablePointer(to: &addr.sun_path) { ptr in
+                ptr.withMemoryRebound(to: CChar.self, capacity: cap) { dst in
+                    strncpy(dst, src, cap - 1)
+                }
+            }
+        }
+        let len = socklen_t(MemoryLayout<sockaddr_un>.size)
+        return withUnsafePointer(to: &addr) {
+            $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { Darwin.connect(fd, $0, len) == 0 }
+        }
     }
 
     static func send(_ request: NotifyRequest) -> NotifyResponse? {

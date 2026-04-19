@@ -11,20 +11,17 @@ echo "Stopping any running NotchNotifyApp..."
 pkill -x NotchNotifyApp 2>/dev/null || true
 sleep 0.3
 
-echo "Installing notch CLI to /usr/local/bin..."
+echo "Installing binaries to /usr/local/bin..."
 sudo cp .build/release/notch /usr/local/bin/notch
+sudo cp .build/release/NotchNotifyApp /usr/local/bin/NotchNotifyApp
 
-echo "Launching NotchNotifyApp..."
-.build/release/NotchNotifyApp &
-sleep 0.5
-
-echo "Sending test notification..."
+echo "Sending test notification (server auto-starts on first use)..."
 notch "NotchNotify installed" \
   -s "build complete" \
   -b "Liquid glass is live." \
-  -i "sf:checkmark.seal.fill" \
+  -i "✅" \
   -a "Nice,Dismiss" \
   -t 10 \
-  --accent "#34C759" &
+  --accent "#34C759"
 
-echo "Done. notch CLI at /usr/local/bin/notch, app running in menu bar."
+echo "Done. Run 'notch' anywhere — server launches automatically."
