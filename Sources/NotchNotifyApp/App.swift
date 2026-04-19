@@ -170,19 +170,24 @@ final class NotchPresenter {
 // Borderless, transparent, floating panel pinned to top-center of the main screen.
 // Critical: sharingType = .none makes this invisible to screen recording.
 
+final class NotchAnim: ObservableObject {
+    @Published var capsuleExpanded = false
+    @Published var cardShown = false
+}
+
 final class NotchWindow: NSPanel {
     private let request: NotifyRequest
     private let completion: (NotifyResponse) -> Void
     private var didComplete = false
     private var dismissTimer: Timer?
+    private let anim = NotchAnim()
 
     init(request: NotifyRequest, completion: @escaping (NotifyResponse) -> Void) {
         self.request = request
         self.completion = completion
 
         let screen = NSScreen.main ?? NSScreen.screens.first!
-        // Size is a starting box; SwiftUI will lay out within it.
-        let size = NSSize(width: 460, height: 210)
+        let size = NSSize(width: 520, height: 260)
         let screenFrame = screen.frame
         let x = screenFrame.midX - size.width / 2
         let y = screenFrame.maxY - size.height
@@ -199,12 +204,13 @@ final class NotchWindow: NSPanel {
         self.level = .screenSaver
         self.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary]
         self.ignoresMouseEvents = false
-        self.sharingType = .none      // invisible to screen recording
+        self.sharingType = .none
         self.hidesOnDeactivate = false
         self.isMovable = false
 
         let content = NotchView(
             request: request,
+            anim: anim,
             onAction: { [weak self] action in self?.finish(action: action, dismissed: false) },
             onDismiss: { [weak self] in self?.finish(action: nil, dismissed: true) }
         )
@@ -218,12 +224,19 @@ final class NotchWindow: NSPanel {
     override var canBecomeMain: Bool { false }
 
     func show() {
-        self.alphaValue = 0
+        self.alphaValue = 1
         self.orderFrontRegardless()
-        NSAnimationContext.runAnimationGroup { ctx in
-            ctx.duration = 0.25
-            self.animator().alphaValue = 1
+
+        withAnimation(.spring(response: 0.38, dampingFraction: 0.78)) {
+            anim.capsuleExpanded = true
         }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.18) { [weak self] in
+            guard let self, !self.didComplete else { return }
+            withAnimation(.spring(response: 0.42, dampingFraction: 0.85)) {
+                self.anim.cardShown = true
+            }
+        }
+
         if let t = request.timeout, t > 0 {
             dismissTimer = Timer.scheduledTimer(withTimeInterval: t, repeats: false) { [weak self] _ in
                 self?.finish(action: nil, dismissed: true)
@@ -238,13 +251,21 @@ final class NotchWindow: NSPanel {
         didComplete = true
         dismissTimer?.invalidate()
         let response = NotifyResponse(action: action, dismissed: dismissed)
-        NSAnimationContext.runAnimationGroup({ ctx in
-            ctx.duration = 0.2
-            self.animator().alphaValue = 0
-        }, completionHandler: {
+
+        // Card retracts fast (100ms), then capsule contracts (180ms).
+        withAnimation(.easeIn(duration: 0.1)) {
+            anim.cardShown = false
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { [weak self] in
+            withAnimation(.spring(response: 0.28, dampingFraction: 0.88)) {
+                self?.anim.capsuleExpanded = false
+            }
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.36) { [weak self] in
+            guard let self else { return }
             self.orderOut(nil)
             self.completion(response)
-        })
+        }
     }
 }
 
@@ -252,12 +273,24 @@ final class NotchWindow: NSPanel {
 
 struct NotchView: View {
     let request: NotifyRequest
+    @ObservedObject var anim: NotchAnim
     let onAction: (String) -> Void
     let onDismiss: () -> Void
 
-    private var topGutter: CGFloat {
-        let inset = NSScreen.main?.safeAreaInsets.top ?? 0
-        return (inset > 0 ? inset : 6) + 10
+    private var hasRealNotch: Bool {
+        (NSScreen.main?.safeAreaInsets.top ?? 0) > 0
+    }
+
+    private var notchHeight: CGFloat {
+        hasRealNotch ? (NSScreen.main?.safeAreaInsets.top ?? 32) : 4
+    }
+
+    private var notchWidth: CGFloat {
+        guard hasRealNotch,
+              let screen = NSScreen.main,
+              let left = screen.auxiliaryTopLeftArea,
+              let right = screen.auxiliaryTopRightArea else { return 80 }
+        return right.minX - left.maxX
     }
 
     private var accentColor: Color {
@@ -265,58 +298,131 @@ struct NotchView: View {
         return .accentColor
     }
 
+    private let cardWidth: CGFloat = 460
+    private let cardCornerRadius: CGFloat = 24
+    private let capsuleOverlap: CGFloat = 8
+
     var body: some View {
-        GlassEffectContainer {
-            VStack(spacing: 0) {
-                Color.clear.frame(height: topGutter)
-
-                HStack(alignment: .top, spacing: 12) {
-                    ImageThumb(image: request.image, accent: accentColor)
-                        .frame(width: 44, height: 44)
-
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text(request.title)
-                            .font(.system(size: 14, weight: .semibold))
-                            .foregroundStyle(.primary)
-                            .lineLimit(1)
-
-                        if let sub = request.subtitle, !sub.isEmpty {
-                            Text(sub)
-                                .font(.system(size: 12, weight: .regular))
-                                .foregroundStyle(.secondary)
-                                .lineLimit(1)
-                        }
-
-                        if let body = request.body, !body.isEmpty {
-                            Text(body)
-                                .font(.system(size: 12.5))
-                                .foregroundStyle(.primary)
-                                .fixedSize(horizontal: false, vertical: true)
-                                .padding(.top, 2)
-                        }
-
-                        if !request.actions.isEmpty {
-                            ActionsRow(actions: request.actions, accent: accentColor, onAction: onAction)
-                                .padding(.top, 8)
-                        }
-                    }
-
-                    Button(action: onDismiss) {
-                        Image(systemName: "xmark")
-                            .font(.system(size: 9, weight: .bold))
-                            .padding(4)
-                    }
-                    .buttonStyle(.glass)
-                    .clipShape(Circle())
-                    .keyboardShortcut(.escape, modifiers: [])
-                }
-                .padding(16)
-                .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 24, style: .continuous))
-                .shadow(color: .black.opacity(0.2), radius: 20, x: 0, y: 8)
-                .padding(.horizontal, 10)
+        ZStack(alignment: .top) {
+            if anim.cardShown {
+                card
+                    .frame(width: cardWidth)
+                    .offset(y: notchHeight - capsuleOverlap)
+                    .transition(.asymmetric(
+                        insertion: .offset(y: -notchHeight).combined(with: .opacity),
+                        removal: .offset(y: -notchHeight).combined(with: .opacity)
+                    ))
             }
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+
+            NotchCapsule(
+                width: anim.capsuleExpanded ? cardWidth : notchWidth,
+                height: notchHeight,
+                hasNotch: hasRealNotch
+            )
+            .animation(.spring(response: 0.38, dampingFraction: 0.82), value: anim.capsuleExpanded)
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+    }
+
+    private var card: some View {
+        GlassEffectContainer {
+            HStack(alignment: .top, spacing: 12) {
+                ImageThumb(image: request.image, accent: accentColor)
+                    .frame(width: 44, height: 44)
+
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(request.title)
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundStyle(.primary)
+                        .lineLimit(1)
+
+                    if let sub = request.subtitle, !sub.isEmpty {
+                        Text(sub)
+                            .font(.system(size: 12, weight: .regular))
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                    }
+
+                    if let body = request.body, !body.isEmpty {
+                        Text(body)
+                            .font(.system(size: 12.5))
+                            .foregroundStyle(.primary)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .padding(.top, 2)
+                    }
+
+                    if !request.actions.isEmpty {
+                        ActionsRow(actions: request.actions, accent: accentColor, onAction: onAction)
+                            .padding(.top, 8)
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+
+                Button(action: onDismiss) {
+                    Image(systemName: "xmark")
+                        .font(.system(size: 9, weight: .bold))
+                        .padding(4)
+                }
+                .buttonStyle(.glass)
+                .clipShape(Circle())
+                .keyboardShortcut(.escape, modifiers: [])
+            }
+            .padding(16)
+            .glassEffect(.regular, in: UnevenRoundedRectangle(
+                topLeadingRadius: 0,
+                bottomLeadingRadius: cardCornerRadius,
+                bottomTrailingRadius: cardCornerRadius,
+                topTrailingRadius: 0,
+                style: .continuous
+            ))
+            .shadow(color: .black.opacity(0.2), radius: 20, x: 0, y: 8)
+        }
+    }
+}
+
+// On notched displays: black bar with flat top + rounded bottom that
+// visually extends the real notch. On non-notched displays: thin pill
+// line at the top that widens into the card width.
+struct NotchCapsule: View {
+    let width: CGFloat
+    let height: CGFloat
+    let hasNotch: Bool
+
+    var body: some View {
+        if hasNotch {
+            NotchCapsuleShape(bottomRadius: min(height * 0.45, 12))
+                .fill(Color.black)
+                .frame(width: width, height: height)
+        } else {
+            Capsule()
+                .fill(Color.black.opacity(0.9))
+                .frame(width: width, height: height)
+                .padding(.top, 4)
+        }
+    }
+}
+
+struct NotchCapsuleShape: Shape {
+    var bottomRadius: CGFloat
+
+    var animatableData: CGFloat {
+        get { bottomRadius }
+        set { bottomRadius = newValue }
+    }
+
+    func path(in rect: CGRect) -> Path {
+        var p = Path()
+        let r = min(bottomRadius, rect.height, rect.width / 2)
+        p.move(to: CGPoint(x: rect.minX, y: rect.minY))
+        p.addLine(to: CGPoint(x: rect.maxX, y: rect.minY))
+        p.addLine(to: CGPoint(x: rect.maxX, y: rect.maxY - r))
+        p.addQuadCurve(to: CGPoint(x: rect.maxX - r, y: rect.maxY),
+                       control: CGPoint(x: rect.maxX, y: rect.maxY))
+        p.addLine(to: CGPoint(x: rect.minX + r, y: rect.maxY))
+        p.addQuadCurve(to: CGPoint(x: rect.minX, y: rect.maxY - r),
+                       control: CGPoint(x: rect.minX, y: rect.maxY))
+        p.closeSubpath()
+        return p
     }
 }
 
