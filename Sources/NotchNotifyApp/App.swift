@@ -78,10 +78,11 @@ final class SocketServer {
 
         var addr = sockaddr_un()
         addr.sun_family = sa_family_t(AF_UNIX)
+        let pathCapacity = MemoryLayout.size(ofValue: addr.sun_path)
         _ = path.withCString { src in
-            withUnsafeMutablePointer(to: &addr.sun_path) {
-                $0.withMemoryRebound(to: CChar.self, capacity: MemoryLayout.size(ofValue: addr.sun_path)) { dst in
-                    strncpy(dst, src, MemoryLayout.size(ofValue: addr.sun_path) - 1)
+            withUnsafeMutablePointer(to: &addr.sun_path) { ptr in
+                ptr.withMemoryRebound(to: CChar.self, capacity: pathCapacity) { dst in
+                    strncpy(dst, src, pathCapacity - 1)
                 }
             }
         }
@@ -206,7 +207,10 @@ final class NotchWindow: NSPanel {
             onAction: { [weak self] action in self?.finish(action: action, dismissed: false) },
             onDismiss: { [weak self] in self?.finish(action: nil, dismissed: true) }
         )
-        self.contentView = NSHostingView(rootView: content)
+        let hostingView = NSHostingView(rootView: content)
+        hostingView.wantsLayer = true
+        hostingView.layer?.backgroundColor = .clear
+        self.contentView = hostingView
     }
 
     override var canBecomeKey: Bool { true }
@@ -260,81 +264,84 @@ struct NotchView: View {
     }
 
     var body: some View {
-        VStack(spacing: 0) {
-            // Top gutter; on notched Macs we push the card below the notch.
-            Color.clear.frame(height: hasNotch ? 34 : 6)
+        GlassEffectContainer {
+            VStack(spacing: 0) {
+                Color.clear.frame(height: hasNotch ? 34 : 6)
 
-            HStack(alignment: .top, spacing: 12) {
-                // LEFT: image / icon
-                ImageThumb(image: request.image, accent: accentColor)
-                    .frame(width: 44, height: 44)
+                HStack(alignment: .top, spacing: 12) {
+                    ImageThumb(image: request.image, accent: accentColor)
+                        .frame(width: 44, height: 44)
 
-                // CENTER: title + subtitle + body
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(request.title)
-                        .font(.system(size: 14, weight: .semibold))
-                        .foregroundStyle(.white)
-                        .lineLimit(1)
-
-                    if let sub = request.subtitle, !sub.isEmpty {
-                        Text(sub)
-                            .font(.system(size: 12, weight: .regular))
-                            .foregroundStyle(.white.opacity(0.65))
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(request.title)
+                            .font(.system(size: 14, weight: .semibold))
+                            .foregroundStyle(.primary)
                             .lineLimit(1)
-                    }
 
-                    if let body = request.body, !body.isEmpty {
-                        Text(body)
-                            .font(.system(size: 12.5))
-                            .foregroundStyle(.white.opacity(0.88))
-                            .fixedSize(horizontal: false, vertical: true)
-                            .padding(.top, 2)
-                    }
-
-                    if !request.actions.isEmpty {
-                        HStack(spacing: 8) {
-                            ForEach(Array(request.actions.enumerated()), id: \.offset) { idx, action in
-                                ActionButton(
-                                    label: action,
-                                    isPrimary: idx == 0,
-                                    accent: accentColor
-                                ) {
-                                    onAction(action)
-                                }
-                                .keyboardShortcut(idx == 0 ? .return : (idx == 1 ? .cancelAction : .defaultAction))
-                            }
-                            Spacer(minLength: 0)
+                        if let sub = request.subtitle, !sub.isEmpty {
+                            Text(sub)
+                                .font(.system(size: 12, weight: .regular))
+                                .foregroundStyle(.secondary)
+                                .lineLimit(1)
                         }
-                        .padding(.top, 8)
-                    }
-                }
 
-                // RIGHT: close
-                Button(action: onDismiss) {
-                    Image(systemName: "xmark")
-                        .font(.system(size: 9, weight: .bold))
-                        .foregroundStyle(.white.opacity(0.7))
-                        .padding(6)
-                        .background(Circle().fill(.white.opacity(0.1)))
+                        if let body = request.body, !body.isEmpty {
+                            Text(body)
+                                .font(.system(size: 12.5))
+                                .foregroundStyle(.primary)
+                                .fixedSize(horizontal: false, vertical: true)
+                                .padding(.top, 2)
+                        }
+
+                        if !request.actions.isEmpty {
+                            ActionsRow(actions: request.actions, accent: accentColor, onAction: onAction)
+                                .padding(.top, 8)
+                        }
+                    }
+
+                    Button(action: onDismiss) {
+                        Image(systemName: "xmark")
+                            .font(.system(size: 9, weight: .bold))
+                            .padding(4)
+                    }
+                    .buttonStyle(.glass)
+                    .clipShape(Circle())
+                    .keyboardShortcut(.escape, modifiers: [])
                 }
-                .buttonStyle(.plain)
-                .keyboardShortcut(.escape, modifiers: [])
+                .padding(16)
+                .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 24, style: .continuous))
+                .shadow(color: .black.opacity(0.2), radius: 20, x: 0, y: 8)
+                .padding(.horizontal, 10)
             }
-            .padding(14)
-            .background(
-                ZStack {
-                    VisualEffectBlur(material: .hudWindow, blendingMode: .behindWindow)
-                    RoundedRectangle(cornerRadius: 20, style: .continuous)
-                        .fill(Color.black.opacity(request.style == "solid" ? 0.55 : 0.28))
-                }
-                .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: 20, style: .continuous)
-                    .stroke(.white.opacity(0.09), lineWidth: 0.5)
-            )
-            .shadow(color: .black.opacity(0.4), radius: 22, x: 0, y: 10)
-            .padding(.horizontal, 10)
+        }
+    }
+}
+
+// MARK: - Actions row
+
+private struct ActionsRow: View {
+    let actions: [String]
+    let accent: Color
+    let onAction: (String) -> Void
+
+    @ViewBuilder
+    private func button(idx: Int, action: String) -> some View {
+        let btn = ActionButton(label: action, isPrimary: idx == 0, accent: accent) { onAction(action) }
+        if idx == 0 {
+            btn.keyboardShortcut(.return)
+        } else if idx == 1 {
+            btn.keyboardShortcut(.cancelAction)
+        } else {
+            btn
+        }
+    }
+
+    var body: some View {
+        HStack(spacing: 6) {
+            ForEach(Array(actions.enumerated()), id: \.offset) { idx, action in
+                button(idx: idx, action: action)
+            }
+            Spacer(minLength: 0)
         }
     }
 }
@@ -351,12 +358,8 @@ struct ImageThumb: View {
 
     var body: some View {
         ZStack {
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .fill(.white.opacity(0.08))
-                .overlay(
-                    RoundedRectangle(cornerRadius: 12, style: .continuous)
-                        .stroke(.white.opacity(0.06), lineWidth: 0.5)
-                )
+            Color.clear
+                .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 13, style: .continuous))
 
             if let raw = image {
                 if raw.hasPrefix("sf:") {
@@ -364,11 +367,24 @@ struct ImageThumb: View {
                     Image(systemName: symbol)
                         .font(.system(size: 20, weight: .semibold))
                         .foregroundStyle(accent)
+                } else if raw.hasPrefix("http://") || raw.hasPrefix("https://"),
+                          let url = URL(string: raw) {
+                    AsyncImage(url: url) { phase in
+                        switch phase {
+                        case .success(let img):
+                            img.resizable().scaledToFill()
+                                .clipShape(RoundedRectangle(cornerRadius: 13, style: .continuous))
+                        default:
+                            fallback
+                        }
+                    }
                 } else if let ns = loadImage(from: raw) {
                     Image(nsImage: ns)
                         .resizable()
                         .scaledToFill()
-                        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                        .clipShape(RoundedRectangle(cornerRadius: 13, style: .continuous))
+                } else if isEmoji(raw) {
+                    Text(raw).font(.system(size: 26))
                 } else {
                     fallback
                 }
@@ -394,6 +410,13 @@ struct ImageThumb: View {
         }
         return nil
     }
+
+    private func isEmoji(_ s: String) -> Bool {
+        guard !s.isEmpty else { return false }
+        return s.unicodeScalars.first.map {
+            $0.properties.isEmoji && $0.value > 127
+        } ?? false
+    }
 }
 
 // MARK: - Action button
@@ -405,39 +428,20 @@ struct ActionButton: View {
     let action: () -> Void
 
     var body: some View {
-        Button(action: action) {
-            Text(label)
+        if isPrimary {
+            Button(label, action: action)
+                .buttonStyle(.glassProminent)
+                .tint(accent)
                 .font(.system(size: 12, weight: .medium))
-                .foregroundStyle(.white)
-                .padding(.horizontal, 12)
-                .padding(.vertical, 6)
-                .background(
-                    RoundedRectangle(cornerRadius: 8, style: .continuous)
-                        .fill(isPrimary ? accent.opacity(0.85) : Color.white.opacity(0.12))
-                )
-                .overlay(
-                    RoundedRectangle(cornerRadius: 8, style: .continuous)
-                        .stroke(.white.opacity(isPrimary ? 0.18 : 0.08), lineWidth: 0.5)
-                )
+        } else {
+            Button(label, action: action)
+                .buttonStyle(.glass)
+                .font(.system(size: 12, weight: .medium))
         }
-        .buttonStyle(.plain)
     }
 }
 
 // MARK: - Helpers
-
-struct VisualEffectBlur: NSViewRepresentable {
-    let material: NSVisualEffectView.Material
-    let blendingMode: NSVisualEffectView.BlendingMode
-    func makeNSView(context: Context) -> NSVisualEffectView {
-        let v = NSVisualEffectView()
-        v.material = material
-        v.blendingMode = blendingMode
-        v.state = .active
-        return v
-    }
-    func updateNSView(_ nsView: NSVisualEffectView, context: Context) {}
-}
 
 extension Color {
     init?(hex: String) {

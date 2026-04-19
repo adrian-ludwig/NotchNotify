@@ -99,10 +99,11 @@ struct CLI {
 
         var addr = sockaddr_un()
         addr.sun_family = sa_family_t(AF_UNIX)
+        let pathCapacity = MemoryLayout.size(ofValue: addr.sun_path)
         _ = SocketPath.path.withCString { src in
-            withUnsafeMutablePointer(to: &addr.sun_path) {
-                $0.withMemoryRebound(to: CChar.self, capacity: MemoryLayout.size(ofValue: addr.sun_path)) { dst in
-                    strncpy(dst, src, MemoryLayout.size(ofValue: addr.sun_path) - 1)
+            withUnsafeMutablePointer(to: &addr.sun_path) { ptr in
+                ptr.withMemoryRebound(to: CChar.self, capacity: pathCapacity) { dst in
+                    strncpy(dst, src, pathCapacity - 1)
                 }
             }
         }

@@ -3,7 +3,7 @@ import PackageDescription
 
 let package = Package(
     name: "NotchNotify",
-    platforms: [.macOS(.v14)],
+    platforms: [.macOS("26.0")],
     products: [
         .executable(name: "NotchNotifyApp", targets: ["NotchNotifyApp"]),
         .executable(name: "notch", targets: ["notch-cli"]),

@@ -13,6 +13,9 @@ DerivedData/
 # macOS
 .DS_Store
 
+# Superpowers brainstorm sessions
+.superpowers/
+
 # Editor
 .vscode/
 .idea/
