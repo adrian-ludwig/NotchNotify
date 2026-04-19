@@ -97,11 +97,7 @@ struct CLI {
     static func ensureServerRunning() {
         guard !canConnect() else { return }
 
-        // Find NotchNotifyApp next to this binary (resolve symlinks first)
-        let selfPath = CommandLine.arguments[0]
-        let resolved = URL(fileURLWithPath: selfPath).resolvingSymlinksInPath()
-        let serverURL = resolved.deletingLastPathComponent().appendingPathComponent("NotchNotifyApp")
-        guard FileManager.default.isExecutableFile(atPath: serverURL.path) else { return }
+        guard let serverURL = findServer() else { return }
 
         // Shell-fork so server detaches like `binary &` in a shell script
         let p = Process()
@@ -118,6 +114,24 @@ struct CLI {
             usleep(100_000)
             if canConnect() { return }
         }
+    }
+
+    static func findServer() -> URL? {
+        // 1. Real path of this binary via kernel API (works regardless of argv[0])
+        var buf = [CChar](repeating: 0, count: Int(PATH_MAX))
+        var len = UInt32(PATH_MAX)
+        if _NSGetExecutablePath(&buf, &len) == 0 {
+            let real = URL(fileURLWithPath: String(cString: buf)).resolvingSymlinksInPath()
+            let candidate = real.deletingLastPathComponent().appendingPathComponent("NotchNotifyApp")
+            if FileManager.default.isExecutableFile(atPath: candidate.path) { return candidate }
+        }
+        // 2. Search PATH directories
+        let dirs = (ProcessInfo.processInfo.environment["PATH"] ?? "").split(separator: ":").map(String.init)
+        for dir in dirs {
+            let candidate = URL(fileURLWithPath: dir).appendingPathComponent("NotchNotifyApp")
+            if FileManager.default.isExecutableFile(atPath: candidate.path) { return candidate }
+        }
+        return nil
     }
 
     static func canConnect() -> Bool {
