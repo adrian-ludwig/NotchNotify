@@ -150,16 +150,53 @@ final class SocketServer {
     }
 }
 
+// MARK: - Queue style
+
+enum QueueStyle: String {
+    case none, bar, badge, both
+
+    static func fromEnv() -> QueueStyle {
+        let raw = ProcessInfo.processInfo.environment["NOTCH_QUEUE_STYLE"]?.lowercased() ?? ""
+        return QueueStyle(rawValue: raw) ?? .both
+    }
+
+    var showBar: Bool { self == .bar || self == .both }
+    var showBadge: Bool { self == .badge || self == .both }
+}
+
 // MARK: - Presenter
 
 final class NotchPresenter {
     private var currentWindow: NotchWindow?
+    private struct Pending {
+        let request: NotifyRequest
+        let completion: (NotifyResponse) -> Void
+    }
+    private var queue: [Pending] = []
+    private let queueStyle: QueueStyle = QueueStyle.fromEnv()
 
     func present(_ request: NotifyRequest, completion: @escaping (NotifyResponse) -> Void) {
-        currentWindow?.dismissImmediately()
-        let window = NotchWindow(request: request) { [weak self] response in
+        if let window = currentWindow {
+            queue.append(Pending(request: request, completion: completion))
+            window.updateQueueDepth(queue.count)
+            return
+        }
+        showNow(request: request, completion: completion)
+    }
+
+    private func showNow(request: NotifyRequest, completion: @escaping (NotifyResponse) -> Void) {
+        let window = NotchWindow(
+            request: request,
+            queueStyle: queueStyle,
+            initialQueueDepth: queue.count
+        ) { [weak self] response in
             completion(response)
-            self?.currentWindow = nil
+            guard let self else { return }
+            self.currentWindow = nil
+            if !self.queue.isEmpty {
+                let next = self.queue.removeFirst()
+                self.showNow(request: next.request, completion: next.completion)
+            }
         }
         currentWindow = window
         window.show()
@@ -173,21 +210,31 @@ final class NotchPresenter {
 final class NotchAnim: ObservableObject {
     @Published var capsuleExpanded = false
     @Published var cardShown = false
+    @Published var queueVisible = false
+    @Published var queueDepth: Int = 0
 }
 
 final class NotchWindow: NSPanel {
     private let request: NotifyRequest
     private let completion: (NotifyResponse) -> Void
+    private let queueStyle: QueueStyle
     private var didComplete = false
     private var dismissTimer: Timer?
     private let anim = NotchAnim()
 
-    init(request: NotifyRequest, completion: @escaping (NotifyResponse) -> Void) {
+    init(
+        request: NotifyRequest,
+        queueStyle: QueueStyle,
+        initialQueueDepth: Int,
+        completion: @escaping (NotifyResponse) -> Void
+    ) {
         self.request = request
+        self.queueStyle = queueStyle
         self.completion = completion
+        self.anim.queueDepth = initialQueueDepth
 
         let screen = NSScreen.main ?? NSScreen.screens.first!
-        let size = NSSize(width: 520, height: 260)
+        let size = NSSize(width: 520, height: 320)
         let screenFrame = screen.frame
         let x = screenFrame.midX - size.width / 2
         let y = screenFrame.maxY - size.height
@@ -211,6 +258,7 @@ final class NotchWindow: NSPanel {
         let content = NotchView(
             request: request,
             anim: anim,
+            queueStyle: queueStyle,
             onAction: { [weak self] action in self?.finish(action: action, dismissed: false) },
             onDismiss: { [weak self] in self?.finish(action: nil, dismissed: true) }
         )
@@ -236,6 +284,12 @@ final class NotchWindow: NSPanel {
                 self.anim.cardShown = true
             }
         }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.55) { [weak self] in
+            guard let self, !self.didComplete else { return }
+            withAnimation(.spring(response: 0.32, dampingFraction: 0.78)) {
+                self.anim.queueVisible = true
+            }
+        }
 
         if let t = request.timeout, t > 0 {
             dismissTimer = Timer.scheduledTimer(withTimeInterval: t, repeats: false) { [weak self] _ in
@@ -246,6 +300,15 @@ final class NotchWindow: NSPanel {
 
     func dismissImmediately() { finish(action: nil, dismissed: true) }
 
+    func updateQueueDepth(_ depth: Int) {
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            withAnimation(.spring(response: 0.32, dampingFraction: 0.78)) {
+                self.anim.queueDepth = depth
+            }
+        }
+    }
+
     private func finish(action: String?, dismissed: Bool) {
         guard !didComplete else { return }
         didComplete = true
@@ -253,6 +316,9 @@ final class NotchWindow: NSPanel {
         let response = NotifyResponse(action: action, dismissed: dismissed)
 
         // Card retracts fast (100ms), then capsule contracts (180ms).
+        withAnimation(.easeIn(duration: 0.08)) {
+            anim.queueVisible = false
+        }
         withAnimation(.easeIn(duration: 0.1)) {
             anim.cardShown = false
         }
@@ -274,6 +340,7 @@ final class NotchWindow: NSPanel {
 struct NotchView: View {
     let request: NotifyRequest
     @ObservedObject var anim: NotchAnim
+    let queueStyle: QueueStyle
     let onAction: (String) -> Void
     let onDismiss: () -> Void
 
@@ -302,16 +369,31 @@ struct NotchView: View {
     private let cardCornerRadius: CGFloat = 24
     private let capsuleOverlap: CGFloat = 8
 
+    private var shouldShowBadge: Bool {
+        hasRealNotch && queueStyle.showBadge && anim.queueDepth > 0 && anim.queueVisible
+    }
+
+    private var shouldShowBar: Bool {
+        queueStyle.showBar && anim.queueDepth > 0 && anim.queueVisible
+    }
+
     var body: some View {
         ZStack(alignment: .top) {
             if anim.cardShown {
-                card
-                    .frame(width: cardWidth)
-                    .offset(y: notchHeight - capsuleOverlap)
-                    .transition(.asymmetric(
-                        insertion: .offset(y: -notchHeight).combined(with: .opacity),
-                        removal: .offset(y: -notchHeight).combined(with: .opacity)
-                    ))
+                VStack(spacing: 6) {
+                    card
+                        .frame(width: cardWidth)
+                    if shouldShowBar {
+                        QueueBar(count: anim.queueDepth)
+                            .frame(width: cardWidth)
+                            .transition(.opacity.combined(with: .offset(y: -10)))
+                    }
+                }
+                .offset(y: notchHeight - capsuleOverlap)
+                .transition(.asymmetric(
+                    insertion: .offset(y: -notchHeight).combined(with: .opacity),
+                    removal: .offset(y: -notchHeight).combined(with: .opacity)
+                ))
             }
 
             NotchCapsule(
@@ -319,7 +401,15 @@ struct NotchView: View {
                 height: notchHeight,
                 hasNotch: hasRealNotch
             )
+            .overlay(alignment: .trailing) {
+                if shouldShowBadge {
+                    QueueBadge(count: anim.queueDepth)
+                        .offset(x: -12, y: -1)
+                        .transition(.scale(scale: 0.4).combined(with: .opacity))
+                }
+            }
             .animation(.spring(response: 0.38, dampingFraction: 0.82), value: anim.capsuleExpanded)
+            .animation(.spring(response: 0.32, dampingFraction: 0.78), value: anim.queueDepth)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
     }
@@ -423,6 +513,42 @@ struct NotchCapsuleShape: Shape {
                        control: CGPoint(x: rect.minX, y: rect.maxY))
         p.closeSubpath()
         return p
+    }
+}
+
+// MARK: - Queue indicators
+
+struct QueueBadge: View {
+    let count: Int
+
+    var body: some View {
+        Text(count > 99 ? "99+" : "\(count)")
+            .font(.system(size: 11, weight: .bold))
+            .foregroundStyle(.black)
+            .frame(minWidth: 18, minHeight: 18)
+            .padding(.horizontal, 5)
+            .background(Circle().fill(Color.white))
+            .shadow(color: .black.opacity(0.35), radius: 2, x: 0, y: 1)
+    }
+}
+
+struct QueueBar: View {
+    let count: Int
+
+    var body: some View {
+        GlassEffectContainer {
+            HStack(spacing: 8) {
+                Image(systemName: "square.stack.3d.down.forward.fill")
+                    .font(.system(size: 11, weight: .semibold))
+                Text(count == 1 ? "1 more notification" : "\(count) more notifications")
+                    .font(.system(size: 12, weight: .medium))
+                Spacer(minLength: 0)
+            }
+            .foregroundStyle(.secondary)
+            .padding(.horizontal, 14)
+            .padding(.vertical, 8)
+            .glassEffect(.regular, in: Capsule())
+        }
     }
 }
 

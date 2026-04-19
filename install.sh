@@ -70,4 +70,17 @@ showoff 5 "NotchNotify installed" \
   -t 4 \
   --accent "#BF5AF2"
 
+# 7. Queue demo — fire 4 notifications in quick succession so the
+#    2nd/3rd/4th queue behind the 1st. Shows badge on notch + bar under card.
+echo "Queue demo — 4 burst notifications..."
+notch "Queued #1" -s "showing now" -i "sf:1.circle.fill" -t 3 --accent "#0A84FF" >/dev/null &
+sleep 0.25
+notch "Queued #2" -s "waiting in line" -i "sf:2.circle.fill" -t 3 --accent "#FF9F0A" >/dev/null &
+sleep 0.25
+notch "Queued #3" -s "waiting in line" -i "sf:3.circle.fill" -t 3 --accent "#FF453A" >/dev/null &
+sleep 0.25
+notch "Queued #4" -s "last in line" -i "sf:4.circle.fill" -t 3 --accent "#34C759" >/dev/null &
+wait
+
 echo "Done. Run 'notch' anywhere — server launches automatically."
+echo "Queue style: NOTCH_QUEUE_STYLE=bar|badge|both|none (default: both)"
