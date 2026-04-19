@@ -18,6 +18,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
+        signal(SIGPIPE, SIG_IGN)
 
         presenter = NotchPresenter()
         server = SocketServer(presenter: presenter)
@@ -254,8 +255,9 @@ struct NotchView: View {
     let onAction: (String) -> Void
     let onDismiss: () -> Void
 
-    private var hasNotch: Bool {
-        (NSScreen.main?.safeAreaInsets.top ?? 0) > 0
+    private var topGutter: CGFloat {
+        let inset = NSScreen.main?.safeAreaInsets.top ?? 0
+        return (inset > 0 ? inset : 6) + 10
     }
 
     private var accentColor: Color {
@@ -266,7 +268,7 @@ struct NotchView: View {
     var body: some View {
         GlassEffectContainer {
             VStack(spacing: 0) {
-                Color.clear.frame(height: hasNotch ? 34 : 6)
+                Color.clear.frame(height: topGutter)
 
                 HStack(alignment: .top, spacing: 12) {
                     ImageThumb(image: request.image, accent: accentColor)
@@ -313,6 +315,7 @@ struct NotchView: View {
                 .shadow(color: .black.opacity(0.2), radius: 20, x: 0, y: 8)
                 .padding(.horizontal, 10)
             }
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         }
     }
 }
