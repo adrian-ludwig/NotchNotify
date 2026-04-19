@@ -164,6 +164,21 @@ enum QueueStyle: String {
     var showBadge: Bool { self == .badge || self == .both }
 }
 
+// MARK: - Notch mode
+
+enum NotchMode: String {
+    case auto, on, off
+
+    static func fromEnv() -> NotchMode {
+        let raw = ProcessInfo.processInfo.environment["NOTCH_FORCE"]?.lowercased() ?? ""
+        return NotchMode(rawValue: raw) ?? .auto
+    }
+
+    // Fallback values used when forced `on` without a real hardware notch.
+    static let forcedWidth: CGFloat = 180
+    static let forcedHeight: CGFloat = 32
+}
+
 // MARK: - Presenter
 
 final class NotchPresenter {
@@ -174,6 +189,7 @@ final class NotchPresenter {
     }
     private var queue: [Pending] = []
     private let queueStyle: QueueStyle = QueueStyle.fromEnv()
+    private let notchMode: NotchMode = NotchMode.fromEnv()
 
     func present(_ request: NotifyRequest, completion: @escaping (NotifyResponse) -> Void) {
         if let window = currentWindow {
@@ -188,6 +204,7 @@ final class NotchPresenter {
         let window = NotchWindow(
             request: request,
             queueStyle: queueStyle,
+            notchMode: notchMode,
             initialQueueDepth: queue.count
         ) { [weak self] response in
             completion(response)
@@ -218,6 +235,7 @@ final class NotchWindow: NSPanel {
     private let request: NotifyRequest
     private let completion: (NotifyResponse) -> Void
     private let queueStyle: QueueStyle
+    private let notchMode: NotchMode
     private var didComplete = false
     private var dismissTimer: Timer?
     private let anim = NotchAnim()
@@ -225,11 +243,13 @@ final class NotchWindow: NSPanel {
     init(
         request: NotifyRequest,
         queueStyle: QueueStyle,
+        notchMode: NotchMode,
         initialQueueDepth: Int,
         completion: @escaping (NotifyResponse) -> Void
     ) {
         self.request = request
         self.queueStyle = queueStyle
+        self.notchMode = notchMode
         self.completion = completion
         self.anim.queueDepth = initialQueueDepth
 
@@ -259,6 +279,7 @@ final class NotchWindow: NSPanel {
             request: request,
             anim: anim,
             queueStyle: queueStyle,
+            notchMode: notchMode,
             onAction: { [weak self] action in self?.finish(action: action, dismissed: false) },
             onDismiss: { [weak self] in self?.finish(action: nil, dismissed: true) }
         )
@@ -341,23 +362,39 @@ struct NotchView: View {
     let request: NotifyRequest
     @ObservedObject var anim: NotchAnim
     let queueStyle: QueueStyle
+    let notchMode: NotchMode
     let onAction: (String) -> Void
     let onDismiss: () -> Void
 
-    private var hasRealNotch: Bool {
+    private var detectedRealNotch: Bool {
         (NSScreen.main?.safeAreaInsets.top ?? 0) > 0
     }
 
+    private var hasRealNotch: Bool {
+        switch notchMode {
+        case .on: return true
+        case .off: return false
+        case .auto: return detectedRealNotch
+        }
+    }
+
     private var notchHeight: CGFloat {
-        hasRealNotch ? (NSScreen.main?.safeAreaInsets.top ?? 32) : 4
+        guard hasRealNotch else { return 4 }
+        if detectedRealNotch, let inset = NSScreen.main?.safeAreaInsets.top, inset > 0 {
+            return inset
+        }
+        return NotchMode.forcedHeight
     }
 
     private var notchWidth: CGFloat {
-        guard hasRealNotch,
-              let screen = NSScreen.main,
-              let left = screen.auxiliaryTopLeftArea,
-              let right = screen.auxiliaryTopRightArea else { return 80 }
-        return right.minX - left.maxX
+        guard hasRealNotch else { return 80 }
+        if detectedRealNotch,
+           let screen = NSScreen.main,
+           let left = screen.auxiliaryTopLeftArea,
+           let right = screen.auxiliaryTopRightArea {
+            return right.minX - left.maxX
+        }
+        return NotchMode.forcedWidth
     }
 
     private var accentColor: Color {

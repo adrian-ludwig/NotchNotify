@@ -7,11 +7,13 @@ Screen-recording-invisible notifications for macOS that live around the notch. C
 - **Floats above everything** — shows over fullscreen apps, all Spaces, never steals focus.
 - **Rich content** — image (file path or SF Symbol), title, subtitle, body, action buttons.
 - **Fast keyboard actions** — `Return` = primary, `Esc` = dismiss.
-- **Glass styling** — `NSVisualEffectView` with Tahoe-style materials.
+- **Dynamic Island animation** — capsule expands from the notch, card slides from under it; thin pill on non-notched displays.
+- **Queue with live indicators** — concurrent requests queue FIFO; white badge on the capsule and/or a glass bar under the card show how many are waiting.
+- **Glass styling** — macOS 26 Tahoe liquid glass (`glassEffect`, `GlassEffectContainer`, `.glass` / `.glassProminent` button styles).
 
 ## Build
 
-Requires Xcode 15+ and macOS 14+ (Sonoma or newer).
+Requires Xcode 16+ and **macOS 26 Tahoe** or newer (liquid glass APIs).
 
 ```bash
 swift build -c release
@@ -23,18 +25,22 @@ Produces two binaries in `.build/release/`:
 
 ## Install
 
+One-shot script: build, stop any running app, install both binaries to `/usr/local/bin`, run a showoff reel (including a 4-notification queue demo):
+
 ```bash
-# 1. Run the app (it lives in the menu bar, no Dock icon)
-./.build/release/NotchNotifyApp &
+./install.sh
+```
 
-# 2. Put the CLI on your PATH
-sudo cp .build/release/notch /usr/local/bin/notch
+Manual equivalent:
 
-# 3. Try it
+```bash
+sudo cp .build/release/notch .build/release/NotchNotifyApp /usr/local/bin/
 notch "Hello" -s "from NotchNotify" -b "It works!" -a OK,Cancel -t 10
 ```
 
-For a proper install (auto-start on login, real `.app` bundle), open `Package.swift` in Xcode, **Product → Archive**, then drag the resulting app to `/Applications` and add it to System Settings → General → Login Items.
+`notch` auto-launches `NotchNotifyApp` if the socket is unreachable, as long as both binaries live in the same directory (or `NotchNotifyApp` is on `PATH`).
+
+For login-time auto-start, open `Package.swift` in Xcode, **Product → Archive**, drop the resulting app into `/Applications`, add to System Settings → General → Login Items.
 
 ## CLI
 
@@ -53,6 +59,11 @@ notch "Title" [options]
 Stdout is one JSON line: `{"action":"Accept","dismissed":false}`
 
 Exit codes: `0` = first action, `1` = any other action, `2` = dismissed, `3` = error.
+
+### Environment
+
+- `NOTCH_QUEUE_STYLE` = `bar` | `badge` | `both` | `none` — picks how the pending-queue depth is displayed while a notification is visible. Default `both`. `badge` is automatically hidden on displays without a real notch. Read once by the server on launch; restart the app to change it.
+- `NOTCH_FORCE` = `on` | `off` | `auto` — overrides notch detection. `on` forces the black capsule + badge even on non-notched displays (uses a 180×32 fallback when no real notch geometry is available); `off` forces the thin glass pill on every display. Default `auto` (detects via `NSScreen.safeAreaInsets.top`).
 
 ## Examples
 
@@ -98,9 +109,10 @@ print(result.get("action"))  # "Yes", "No", or None
 - **Window:** a borderless `NSPanel` pinned to the top-center of the main screen. `level = .screenSaver` puts it above fullscreen apps; `collectionBehavior` includes `.fullScreenAuxiliary` + `.canJoinAllSpaces`.
 - **Invisibility to recording:** `window.sharingType = .none`. macOS excludes the window from every capture API.
 - **No permission prompt:** we never use `UNUserNotificationCenter`. It's just a window.
-- **IPC:** Unix domain socket at `~/.config/NotchNotify/connect.socket`, mode `0600` (directory `0700`). Honors `XDG_CONFIG_HOME` if set. One JSON line request → one JSON line response → close.
-- **Notch awareness:** on notched displays (`NSScreen.safeAreaInsets.top > 0`) the card is pushed down past the notch.
-- **Multiple notifications:** currently the presenter replaces any active notification with a new one. Change `NotchPresenter` if you want queueing or stacking.
+- **IPC:** Unix domain socket at `~/.config/NotchNotify/connect.socket`, mode `0600` (directory `0700`). Honors `XDG_CONFIG_HOME` if set. One JSON line request → one JSON line response → close. Server ignores `SIGPIPE` so a CLI probe that hangs up mid-write does not kill the app.
+- **Notch awareness:** `NSScreen.safeAreaInsets.top > 0` picks notched layout (`NotchCapsuleShape`: flat top, rounded bottom, width from `auxiliaryTopLeftArea`/`auxiliaryTopRightArea`). Otherwise a thin glass pill stands in for the capsule.
+- **Animation:** capsule expands from notch width to card width (spring, ~380 ms), card slides down from under the capsule with only the bottom corners rounded so it tucks under (`UnevenRoundedRectangle`). Dismissal: card retracts (~100 ms), capsule contracts (~280 ms), window closes at ~360 ms.
+- **Queue:** `NotchPresenter` holds a FIFO queue. When a request arrives while one is visible it's appended and `NotchAnim.queueDepth` is updated live on the current window. A white circle badge sits inside the capsule (notched only) and/or a glass bar sits under the card with a 6 px gap. Both fade in only after the expansion finishes (`queueVisible` flag, +550 ms). Style chosen via `NOTCH_QUEUE_STYLE`.
 
 ## File layout
 
@@ -121,9 +133,10 @@ NotchNotify/
 
 ## Customizing
 
-- **Visuals:** `NotchView` in `App.swift` — swap `VisualEffectBlur` material (`.hudWindow`, `.fullScreenUI`, `.popover`, `.underWindowBackground`), change corner radius, padding, colors.
-- **Window size / position:** `NotchWindow.init` — edit the `size` NSSize and the `y` calculation.
-- **Queue vs replace:** currently the presenter replaces any active notification with the new one. For queueing, buffer requests in `NotchPresenter`.
+- **Visuals:** `NotchView` in `App.swift` — adjust glass materials (`glassEffect(.regular, …)`), corner radius, padding, card width (`cardWidth = 460`), capsule overlap (`capsuleOverlap = 8`).
+- **Window size / position:** `NotchWindow.init` — edit the `size` NSSize (currently `520×320`) and the `y` calculation.
+- **Animation timing:** `show()` and `finish()` in `NotchWindow` — tune spring response / damping and the `asyncAfter` offsets for capsule-expand, card-slide, badge/bar fade-in (`queueVisible`).
+- **Queue UI:** `QueueBadge` and `QueueBar` in `App.swift`. `QueueStyle.fromEnv()` picks which one(s) render. `NotchPresenter.queue` is a plain FIFO — swap for LIFO, coalescing, or drop-oldest if needed.
 - **More fields:** add to `NotifyRequest` in *both* `Protocol.swift` files, then render them in `NotchView` and parse them in the CLI.
 
 ## Making a proper .app bundle
