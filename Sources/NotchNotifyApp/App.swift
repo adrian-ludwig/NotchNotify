@@ -274,6 +274,7 @@ final class NotchWindow: NSPanel {
         self.sharingType = .none
         self.hidesOnDeactivate = false
         self.isMovable = false
+        self.becomesKeyOnlyIfNeeded = true
 
         let content = NotchView(
             request: request,
@@ -292,23 +293,43 @@ final class NotchWindow: NSPanel {
     override var canBecomeKey: Bool { true }
     override var canBecomeMain: Bool { false }
 
+    private var effectiveHasNotch: Bool {
+        switch notchMode {
+        case .on: return true
+        case .off: return false
+        case .auto: return (NSScreen.main?.safeAreaInsets.top ?? 0) > 0
+        }
+    }
+
     func show() {
         self.alphaValue = 1
         self.orderFrontRegardless()
 
-        withAnimation(.spring(response: 0.38, dampingFraction: 0.78)) {
-            anim.capsuleExpanded = true
-        }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.18) { [weak self] in
-            guard let self, !self.didComplete else { return }
-            withAnimation(.spring(response: 0.42, dampingFraction: 0.85)) {
-                self.anim.cardShown = true
+        if effectiveHasNotch {
+            withAnimation(.spring(response: 0.38, dampingFraction: 0.78)) {
+                anim.capsuleExpanded = true
             }
-        }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.55) { [weak self] in
-            guard let self, !self.didComplete else { return }
-            withAnimation(.spring(response: 0.32, dampingFraction: 0.78)) {
-                self.anim.queueVisible = true
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.18) { [weak self] in
+                guard let self, !self.didComplete else { return }
+                withAnimation(.spring(response: 0.42, dampingFraction: 0.85)) {
+                    self.anim.cardShown = true
+                }
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.55) { [weak self] in
+                guard let self, !self.didComplete else { return }
+                withAnimation(.spring(response: 0.32, dampingFraction: 0.78)) {
+                    self.anim.queueVisible = true
+                }
+            }
+        } else {
+            withAnimation(.spring(response: 0.42, dampingFraction: 0.85)) {
+                anim.cardShown = true
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.32) { [weak self] in
+                guard let self, !self.didComplete else { return }
+                withAnimation(.spring(response: 0.32, dampingFraction: 0.78)) {
+                    self.anim.queueVisible = true
+                }
             }
         }
 
@@ -336,22 +357,31 @@ final class NotchWindow: NSPanel {
         dismissTimer?.invalidate()
         let response = NotifyResponse(action: action, dismissed: dismissed)
 
-        // Card retracts fast (100ms), then capsule contracts (180ms).
         withAnimation(.easeIn(duration: 0.08)) {
             anim.queueVisible = false
         }
-        withAnimation(.easeIn(duration: 0.1)) {
+        withAnimation(.easeIn(duration: 0.18)) {
             anim.cardShown = false
         }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { [weak self] in
-            withAnimation(.spring(response: 0.28, dampingFraction: 0.88)) {
-                self?.anim.capsuleExpanded = false
+
+        if effectiveHasNotch {
+            // Card retracts fast, then capsule contracts.
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { [weak self] in
+                withAnimation(.spring(response: 0.28, dampingFraction: 0.88)) {
+                    self?.anim.capsuleExpanded = false
+                }
             }
-        }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.36) { [weak self] in
-            guard let self else { return }
-            self.orderOut(nil)
-            self.completion(response)
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.36) { [weak self] in
+                guard let self else { return }
+                self.orderOut(nil)
+                self.completion(response)
+            }
+        } else {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { [weak self] in
+                guard let self else { return }
+                self.orderOut(nil)
+                self.completion(response)
+            }
         }
     }
 }
@@ -405,6 +435,7 @@ struct NotchView: View {
     private let cardWidth: CGFloat = 460
     private let cardCornerRadius: CGFloat = 24
     private let capsuleOverlap: CGFloat = 8
+    private let popoverTopInset: CGFloat = 72
 
     private var shouldShowBadge: Bool {
         hasRealNotch && queueStyle.showBadge && anim.queueDepth > 0 && anim.queueVisible
@@ -415,6 +446,17 @@ struct NotchView: View {
     }
 
     var body: some View {
+        Group {
+            if hasRealNotch {
+                notchLayout
+            } else {
+                popoverLayout
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+    }
+
+    private var notchLayout: some View {
         ZStack(alignment: .top) {
             if anim.cardShown {
                 VStack(spacing: 6) {
@@ -436,7 +478,7 @@ struct NotchView: View {
             NotchCapsule(
                 width: anim.capsuleExpanded ? cardWidth : notchWidth,
                 height: notchHeight,
-                hasNotch: hasRealNotch
+                hasNotch: true
             )
             .overlay(alignment: .trailing) {
                 if shouldShowBadge {
@@ -448,62 +490,78 @@ struct NotchView: View {
             .animation(.spring(response: 0.38, dampingFraction: 0.82), value: anim.capsuleExpanded)
             .animation(.spring(response: 0.32, dampingFraction: 0.78), value: anim.queueDepth)
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+    }
+
+    private var popoverLayout: some View {
+        VStack(spacing: 6) {
+            if anim.cardShown {
+                card
+                    .frame(width: cardWidth)
+                    .transition(.asymmetric(
+                        insertion: .offset(y: -40).combined(with: .opacity),
+                        removal: .offset(y: -20).combined(with: .opacity)
+                    ))
+            }
+            if shouldShowBar {
+                QueueBar(count: anim.queueDepth)
+                    .frame(width: cardWidth)
+                    .transition(.opacity.combined(with: .offset(y: -10)))
+            }
+        }
+        .padding(.top, popoverTopInset)
     }
 
     private var card: some View {
-        GlassEffectContainer {
-            HStack(alignment: .top, spacing: 12) {
-                ImageThumb(image: request.image, accent: accentColor)
-                    .frame(width: 44, height: 44)
+        HStack(alignment: .top, spacing: 12) {
+            ImageThumb(image: request.image, accent: accentColor)
+                .frame(width: 44, height: 44)
 
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(request.title)
-                        .font(.system(size: 14, weight: .semibold))
-                        .foregroundStyle(.primary)
+            VStack(alignment: .leading, spacing: 4) {
+                Text(request.title)
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundStyle(.primary)
+                    .lineLimit(1)
+
+                if let sub = request.subtitle, !sub.isEmpty {
+                    Text(sub)
+                        .font(.system(size: 12, weight: .regular))
+                        .foregroundStyle(.secondary)
                         .lineLimit(1)
-
-                    if let sub = request.subtitle, !sub.isEmpty {
-                        Text(sub)
-                            .font(.system(size: 12, weight: .regular))
-                            .foregroundStyle(.secondary)
-                            .lineLimit(1)
-                    }
-
-                    if let body = request.body, !body.isEmpty {
-                        Text(body)
-                            .font(.system(size: 12.5))
-                            .foregroundStyle(.primary)
-                            .fixedSize(horizontal: false, vertical: true)
-                            .padding(.top, 2)
-                    }
-
-                    if !request.actions.isEmpty {
-                        ActionsRow(actions: request.actions, accent: accentColor, onAction: onAction)
-                            .padding(.top, 8)
-                    }
                 }
-                .frame(maxWidth: .infinity, alignment: .leading)
 
-                Button(action: onDismiss) {
-                    Image(systemName: "xmark")
-                        .font(.system(size: 9, weight: .bold))
-                        .padding(4)
+                if let body = request.body, !body.isEmpty {
+                    Text(body)
+                        .font(.system(size: 12.5))
+                        .foregroundStyle(.primary)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .padding(.top, 2)
                 }
-                .buttonStyle(.glass)
-                .clipShape(Circle())
-                .keyboardShortcut(.escape, modifiers: [])
+
+                if !request.actions.isEmpty {
+                    ActionsRow(actions: request.actions, accent: accentColor, onAction: onAction)
+                        .padding(.top, 8)
+                }
             }
-            .padding(16)
-            .glassEffect(.regular, in: UnevenRoundedRectangle(
-                topLeadingRadius: 0,
-                bottomLeadingRadius: cardCornerRadius,
-                bottomTrailingRadius: cardCornerRadius,
-                topTrailingRadius: 0,
-                style: .continuous
-            ))
-            .shadow(color: .black.opacity(0.2), radius: 20, x: 0, y: 8)
+            .frame(maxWidth: .infinity, alignment: .leading)
+
+            Button(action: onDismiss) {
+                Image(systemName: "xmark")
+                    .font(.system(size: 9, weight: .bold))
+                    .padding(4)
+            }
+            .buttonStyle(.glass)
+            .clipShape(Circle())
+            .keyboardShortcut(.escape, modifiers: [])
         }
+        .padding(16)
+        .glassEffect(.regular, in: UnevenRoundedRectangle(
+            topLeadingRadius: hasRealNotch ? 0 : cardCornerRadius,
+            bottomLeadingRadius: cardCornerRadius,
+            bottomTrailingRadius: cardCornerRadius,
+            topTrailingRadius: hasRealNotch ? 0 : cardCornerRadius,
+            style: .continuous
+        ))
+        .shadow(color: .black.opacity(0.2), radius: 20, x: 0, y: 8)
     }
 }
 
@@ -700,16 +758,23 @@ struct ActionButton: View {
     let action: () -> Void
 
     var body: some View {
-        if isPrimary {
-            Button(label, action: action)
-                .buttonStyle(.glassProminent)
-                .tint(accent)
-                .font(.system(size: 12, weight: .medium))
-        } else {
-            Button(label, action: action)
-                .buttonStyle(.glass)
-                .font(.system(size: 12, weight: .medium))
+        Button(action: action) {
+            Text(label)
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(isPrimary ? .white : .primary)
+                .padding(.horizontal, 14)
+                .padding(.vertical, 6)
+                .frame(minWidth: 44)
+                .background {
+                    if isPrimary {
+                        Capsule(style: .continuous).fill(accent)
+                    } else {
+                        Color.clear
+                            .glassEffect(.regular, in: Capsule(style: .continuous))
+                    }
+                }
         }
+        .buttonStyle(.plain)
     }
 }
 
