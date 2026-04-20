@@ -479,7 +479,7 @@ struct NotchView: View {
     private var notchLayout: some View {
         ZStack(alignment: .top) {
             if anim.cardShown {
-                VStack(spacing: 6) {
+                VStack(spacing: QueueBarStyle.stackSpacing) {
                     card
                         .frame(width: cardWidth)
                     if shouldShowBar {
@@ -513,7 +513,7 @@ struct NotchView: View {
     }
 
     private var popoverLayout: some View {
-        VStack(spacing: 6) {
+        VStack(spacing: QueueBarStyle.stackSpacing) {
             if anim.cardShown {
                 card
                     .frame(width: cardWidth)
@@ -659,10 +659,11 @@ struct QueueBar: View {
                     .font(.system(size: 12, weight: .medium))
                 Spacer(minLength: 0)
             }
-            .foregroundStyle(.secondary)
-            .padding(.horizontal, 14)
-            .padding(.vertical, 8)
-            .glassEffect(.regular, in: Capsule())
+            .foregroundStyle(.primary)
+            .padding(.horizontal, QueueBarStyle.horizontalPadding)
+            .padding(.vertical, QueueBarStyle.verticalPadding)
+            .glassEffect(.regular, in: Capsule(style: .continuous))
+            .shadow(color: .black.opacity(0.2), radius: QueueBarStyle.shadowRadius, x: 0, y: QueueBarStyle.shadowYOffset)
         }
     }
 }
