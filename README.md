@@ -63,7 +63,8 @@ Exit codes: `0` = first action, `1` = any other action, `2` = dismissed, `3` = e
 ### Environment
 
 - `NOTCH_QUEUE_STYLE` = `bar` | `badge` | `both` | `none` — picks how the pending-queue depth is displayed while a notification is visible. Default `both`. `badge` is automatically hidden on displays without a real notch. Read once by the server on launch; restart the app to change it.
-- `NOTCH_FORCE` = `on` | `off` | `auto` — overrides notch detection. `on` forces the black capsule + badge even on non-notched displays (uses a 180×32 fallback when no real notch geometry is available); `off` forces the thin glass pill on every display. Default `auto` (detects via `NSScreen.safeAreaInsets.top`).
+- `NOTCH_FORCE` = `on` | `off` | `auto` — overrides notch detection. `on` forces the black capsule + badge even on non-notched displays (uses a 180×32 fallback when no real notch geometry is available); `off` forces the thin glass pill on every display. Default `auto` (detects from the chosen target display, not from all connected displays).
+- `NOTCH_SCREEN_TARGET` = `main` | `notch` — picks which display the notification window attaches to. Default `main`. `notch` restores the old behavior of preferring a notched display first. Read once by the server on launch; restart the app to change it.
 
 ## Examples
 
@@ -106,13 +107,13 @@ print(result.get("action"))  # "Yes", "No", or None
 
 ## How it works
 
-- **Window:** a borderless `NSPanel` pinned to the top-center of the main screen. `level = .screenSaver` puts it above fullscreen apps; `collectionBehavior` includes `.fullScreenAuxiliary` + `.canJoinAllSpaces`.
+- **Window:** a borderless `NSPanel` pinned to the top-center of the target screen. By default that is the main screen; if macOS does not report one, it falls back to a notched display and then any display. Set `NOTCH_SCREEN_TARGET=notch` to prefer a notched display first. `level = .screenSaver` puts it above fullscreen apps; `collectionBehavior` includes `.fullScreenAuxiliary` + `.canJoinAllSpaces`.
 - **Invisibility to recording:** `window.sharingType = .none`. macOS excludes the window from every capture API.
 - **No permission prompt:** we never use `UNUserNotificationCenter`. It's just a window.
 - **IPC:** Unix domain socket at `~/.config/NotchNotify/connect.socket`, mode `0600` (directory `0700`). Honors `XDG_CONFIG_HOME` if set. One JSON line request → one JSON line response → close. Server ignores `SIGPIPE` so a CLI probe that hangs up mid-write does not kill the app.
-- **Notch awareness:** `NSScreen.safeAreaInsets.top > 0` picks notched layout (`NotchCapsuleShape`: flat top, rounded bottom, width from `auxiliaryTopLeftArea`/`auxiliaryTopRightArea`). Otherwise a thin glass pill stands in for the capsule.
+- **Notch awareness:** `NSScreen.safeAreaInsets.top > 0` on the chosen target display picks notched layout (`NotchCapsuleShape`: flat top, rounded bottom, width from `auxiliaryTopLeftArea`/`auxiliaryTopRightArea`). Otherwise a thin glass pill stands in for the capsule. `NOTCH_FORCE` can override this per launch.
 - **Animation:** capsule expands from notch width to card width (spring, ~380 ms), card slides down from under the capsule with only the bottom corners rounded so it tucks under (`UnevenRoundedRectangle`). Dismissal: card retracts (~100 ms), capsule contracts (~280 ms), window closes at ~360 ms.
-- **Queue:** `NotchPresenter` holds a FIFO queue. When a request arrives while one is visible it's appended and `NotchAnim.queueDepth` is updated live on the current window. A white circle badge sits inside the capsule (notched only) and/or a glass bar sits under the card with a 6 px gap. Both fade in only after the expansion finishes (`queueVisible` flag, +550 ms). Style chosen via `NOTCH_QUEUE_STYLE`.
+- **Queue:** `NotchPresenter` holds a FIFO queue. When a request arrives while one is visible it's appended and `NotchAnim.queueDepth` is updated live on the current window. A white circle badge sits inside the capsule (notched only) and/or a glass bar sits under the card with a 6 px gap. The queue bar is intentionally a separate glass surface, so it can sample material independently from the main card rather than appearing as one merged popover. Both fade in only after the expansion finishes (`queueVisible` flag, +550 ms). Style chosen via `NOTCH_QUEUE_STYLE`.
 
 ## File layout
 

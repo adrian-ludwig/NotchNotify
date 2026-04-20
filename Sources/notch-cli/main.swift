@@ -99,15 +99,14 @@ struct CLI {
 
         guard let serverURL = findServer() else { return }
 
-        // Shell-fork so server detaches like `binary &` in a shell script
+        let launchPlan = ServerLaunchPlan.make(for: serverURL)
         let p = Process()
-        p.executableURL = URL(fileURLWithPath: "/bin/sh")
-        p.arguments = ["-c", "\"\(serverURL.path)\" &"]
+        p.executableURL = launchPlan.executableURL
+        p.arguments = launchPlan.arguments
         p.standardInput = FileHandle.nullDevice
         p.standardOutput = FileHandle.nullDevice
         p.standardError = FileHandle.nullDevice
         try? p.run()
-        p.waitUntilExit()
 
         // Wait up to 5s for socket
         for _ in 0..<50 {

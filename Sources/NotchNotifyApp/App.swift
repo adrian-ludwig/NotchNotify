@@ -174,9 +174,48 @@ enum NotchMode: String {
         return NotchMode(rawValue: raw) ?? .auto
     }
 
-    // Fallback values used when forced `on` without a real hardware notch.
-    static let forcedWidth: CGFloat = 180
-    static let forcedHeight: CGFloat = 32
+    // Physical notch geometry on Apple Silicon MacBook Pros (14"/16").
+    // auxiliaryTopLeftArea/auxiliaryTopRightArea describe the *menu bar* halves,
+    // not the notch — they include ~20pt of padding each side and the full 38pt
+    // menu bar height. Use hardcoded notch dimensions instead.
+    static let defaultWidth: CGFloat = 180
+    static let defaultHeight: CGFloat = 32
+
+    static var notchWidth: CGFloat {
+        if let raw = ProcessInfo.processInfo.environment["NOTCH_WIDTH"],
+           let v = Double(raw) { return CGFloat(v) }
+        return defaultWidth
+    }
+
+    static var notchHeight: CGFloat {
+        if let raw = ProcessInfo.processInfo.environment["NOTCH_HEIGHT"],
+           let v = Double(raw) { return CGFloat(v) }
+        return defaultHeight
+    }
+}
+
+enum NotchScreen {
+    private static let targetMode = ScreenTargetMode.fromEnv()
+
+    static var target: NSScreen {
+        let screens = NSScreen.screens
+        let candidates = screens.map { screen in
+            NotchScreenSelector.ScreenCandidate(
+                isMain: screen == NSScreen.main,
+                hasNotch: screen.safeAreaInsets.top > 0
+            )
+        }
+
+        guard let targetIndex = NotchScreenSelector.targetIndex(in: candidates, mode: targetMode) else {
+            fatalError("Expected at least one available screen")
+        }
+
+        return screens[targetIndex]
+    }
+
+    static var anyHasNotch: Bool {
+        NSScreen.screens.contains(where: { $0.safeAreaInsets.top > 0 })
+    }
 }
 
 // MARK: - Presenter
@@ -236,6 +275,7 @@ final class NotchWindow: NSPanel {
     private let completion: (NotifyResponse) -> Void
     private let queueStyle: QueueStyle
     private let notchMode: NotchMode
+    private let targetScreenHasNotch: Bool
     private var didComplete = false
     private var dismissTimer: Timer?
     private let anim = NotchAnim()
@@ -253,7 +293,8 @@ final class NotchWindow: NSPanel {
         self.completion = completion
         self.anim.queueDepth = initialQueueDepth
 
-        let screen = NSScreen.main ?? NSScreen.screens.first!
+        let screen = NotchScreen.target
+        self.targetScreenHasNotch = screen.safeAreaInsets.top > 0
         let size = NSSize(width: 520, height: 320)
         let screenFrame = screen.frame
         let x = screenFrame.midX - size.width / 2
@@ -281,6 +322,7 @@ final class NotchWindow: NSPanel {
             anim: anim,
             queueStyle: queueStyle,
             notchMode: notchMode,
+            targetScreenHasNotch: targetScreenHasNotch,
             onAction: { [weak self] action in self?.finish(action: action, dismissed: false) },
             onDismiss: { [weak self] in self?.finish(action: nil, dismissed: true) }
         )
@@ -294,11 +336,7 @@ final class NotchWindow: NSPanel {
     override var canBecomeMain: Bool { false }
 
     private var effectiveHasNotch: Bool {
-        switch notchMode {
-        case .on: return true
-        case .off: return false
-        case .auto: return (NSScreen.main?.safeAreaInsets.top ?? 0) > 0
-        }
+        EffectiveNotchMode.resolve(notchMode: notchMode, targetScreenHasNotch: targetScreenHasNotch)
     }
 
     func show() {
@@ -393,38 +431,20 @@ struct NotchView: View {
     @ObservedObject var anim: NotchAnim
     let queueStyle: QueueStyle
     let notchMode: NotchMode
+    let targetScreenHasNotch: Bool
     let onAction: (String) -> Void
     let onDismiss: () -> Void
 
-    private var detectedRealNotch: Bool {
-        (NSScreen.main?.safeAreaInsets.top ?? 0) > 0
-    }
-
     private var hasRealNotch: Bool {
-        switch notchMode {
-        case .on: return true
-        case .off: return false
-        case .auto: return detectedRealNotch
-        }
+        EffectiveNotchMode.resolve(notchMode: notchMode, targetScreenHasNotch: targetScreenHasNotch)
     }
 
     private var notchHeight: CGFloat {
-        guard hasRealNotch else { return 4 }
-        if detectedRealNotch, let inset = NSScreen.main?.safeAreaInsets.top, inset > 0 {
-            return inset
-        }
-        return NotchMode.forcedHeight
+        hasRealNotch ? NotchMode.notchHeight : 4
     }
 
     private var notchWidth: CGFloat {
-        guard hasRealNotch else { return 80 }
-        if detectedRealNotch,
-           let screen = NSScreen.main,
-           let left = screen.auxiliaryTopLeftArea,
-           let right = screen.auxiliaryTopRightArea {
-            return right.minX - left.maxX
-        }
-        return NotchMode.forcedWidth
+        hasRealNotch ? NotchMode.notchWidth : 80
     }
 
     private var accentColor: Color {

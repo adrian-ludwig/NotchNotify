@@ -28,6 +28,10 @@ NOTCH_QUEUE_STYLE=bar   .build/release/NotchNotifyApp &
 NOTCH_QUEUE_STYLE=badge .build/release/NotchNotifyApp &
 NOTCH_QUEUE_STYLE=none  .build/release/NotchNotifyApp &
 
+# Pick which screen the notification attaches to (default: main)
+NOTCH_SCREEN_TARGET=main  .build/release/NotchNotifyApp &
+NOTCH_SCREEN_TARGET=notch .build/release/NotchNotifyApp &
+
 # Force notch-style capsule on a non-notched display (or vice versa)
 NOTCH_FORCE=on  .build/release/NotchNotifyApp &   # black capsule everywhere
 NOTCH_FORCE=off .build/release/NotchNotifyApp &   # thin pill everywhere
@@ -46,7 +50,7 @@ Unix domain socket at `~/.config/NotchNotify/connect.socket` (mode `0600`). Wire
 
 ### Notification window (`App.swift`)
 
-`NotchWindow` is a borderless `NSPanel` at `.screenSaver` level, `sharingType = .none` (invisible to screen recording). `NSHostingView` hosts `NotchView`. Window frame `520×320`, pinned top-center.
+`NotchWindow` is a borderless `NSPanel` at `.screenSaver` level, `sharingType = .none` (invisible to screen recording). `NSHostingView` hosts `NotchView`. Window frame `520×320`, pinned top-center of the target display. Default target is `NSScreen.main`; `NOTCH_SCREEN_TARGET=notch` prefers a notched display first.
 
 Visual stack (macOS 26 Tahoe):
 - Outermost: `GlassEffectContainer` (required for `glassEffect` to render)
@@ -61,7 +65,7 @@ Visual stack (macOS 26 Tahoe):
 - `true` → `NotchCapsuleShape` (flat top, rounded bottom), width from `auxiliaryTopLeftArea.maxX` / `auxiliaryTopRightArea.minX`, height from `safeAreaInsets.top`
 - `false` → `Capsule()` 4 px tall stand-in
 
-`NotchMode` (`auto` / `on` / `off`, env `NOTCH_FORCE`) overrides detection. When forced `on` without real notch geometry, falls back to `NotchMode.forcedWidth` (180) and `forcedHeight` (32).
+`NotchMode` (`auto` / `on` / `off`, env `NOTCH_FORCE`) overrides detection. In `auto`, notch styling follows the chosen target display only, not any other connected display. When forced `on` without real notch geometry, falls back to `NotchMode.forcedWidth` (180) and `forcedHeight` (32).
 
 `NotchAnim` `@Published` flags drive timing:
 - `show()` — `capsuleExpanded = true` immediately (spring 0.38s), `cardShown = true` at +0.18s (spring 0.42s), `queueVisible = true` at +0.55s (spring 0.32s)
@@ -73,7 +77,7 @@ Visual stack (macOS 26 Tahoe):
 
 Indicators (both gated on `anim.queueVisible && queueDepth > 0`):
 - `QueueBadge` — white circle + black number, overlay on capsule `alignment: .trailing` with offset `(x:-12, y:-1)`. Only rendered when `hasRealNotch`.
-- `QueueBar` — glass capsule with "N more notification(s)", in `VStack(spacing: 6)` under the card.
+- `QueueBar` — separate glass capsule with "N more notification(s)", in `VStack(spacing: 6)` under the card. It is intentionally not merged into the main popover surface, so its material can look slightly different from the card.
 
 `QueueStyle` enum (`bar` / `badge` / `both` / `none`) read once from `NOTCH_QUEUE_STYLE` in `QueueStyle.fromEnv()` at presenter init. Default `both`.
 
@@ -91,7 +95,7 @@ Indicators (both gated on `anim.queueVisible && queueDepth > 0`):
 
 ### Auto-launch logic (CLI)
 
-`ensureServerRunning()` resolves symlinks on `argv[0]`, looks for `NotchNotifyApp` in the same directory, launches it with stdio → `/dev/null`, polls socket every 100ms up to 3s.
+`ensureServerRunning()` resolves symlinks on `argv[0]`, looks for `NotchNotifyApp` in the same directory or on `PATH`, launches it directly with `Process` and stdio → `/dev/null`, then polls the socket every 100ms up to 5s.
 
 ## Platform
 

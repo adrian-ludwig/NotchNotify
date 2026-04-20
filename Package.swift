@@ -17,5 +17,10 @@ let package = Package(
             name: "notch-cli",
             path: "Sources/notch-cli"
         ),
+        .testTarget(
+            name: "NotchNotifyAppTests",
+            dependencies: ["NotchNotifyApp", "notch-cli"],
+            path: "Tests/NotchNotifyAppTests"
+        ),
     ]
 )
