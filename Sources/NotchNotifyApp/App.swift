@@ -179,7 +179,7 @@ enum NotchMode: String {
     // not the notch — they include ~20pt of padding each side and the full 38pt
     // menu bar height. Use hardcoded notch dimensions instead.
     static let defaultWidth: CGFloat = 180
-    static let defaultHeight: CGFloat = 32
+    static let defaultHeight: CGFloat = 38
 
     static var notchWidth: CGFloat {
         if let raw = ProcessInfo.processInfo.environment["NOTCH_WIDTH"],

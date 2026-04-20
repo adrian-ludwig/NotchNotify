@@ -56,4 +56,8 @@ final class NotchScreenSelectorTests: XCTestCase {
         XCTAssertTrue(EffectiveNotchMode.resolve(notchMode: .on, targetScreenHasNotch: false))
         XCTAssertFalse(EffectiveNotchMode.resolve(notchMode: .off, targetScreenHasNotch: true))
     }
+
+    func testNotchModeDefaultHeightMatchesFullMenuBarInset() {
+        XCTAssertEqual(NotchMode.defaultHeight, 38)
+    }
 }
