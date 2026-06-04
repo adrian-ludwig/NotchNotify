@@ -11,10 +11,34 @@ echo "Stopping any running NotchNotifyApp..."
 pkill -x NotchNotifyApp 2>/dev/null || true
 sleep 0.3
 
-echo "Installing binaries to /usr/local/bin..."
-sudo cp .build/release/notch /usr/local/bin/notch
-sudo cp .build/release/NotchNotifyApp /usr/local/bin/NotchNotifyApp
-sudo chmod 755 /usr/local/bin/notch /usr/local/bin/NotchNotifyApp
+# Install to a user-owned directory, not root-owned /usr/local/bin. swift build
+# emits an "adhoc, linker-signed" signature that the kernel only honors at the
+# original build path; copying it to a root-owned path via sudo makes macOS
+# reject the launch with "Taskgated Invalid Signature" (SIGKILL). A user-owned
+# copy plus a fresh adhoc re-sign launches cleanly from any path, no sudo.
+INSTALL_DIR="${NOTCH_INSTALL_DIR:-}"
+if [ -z "$INSTALL_DIR" ]; then
+  if [ -w /opt/homebrew/bin ]; then
+    INSTALL_DIR="/opt/homebrew/bin"   # Apple Silicon Homebrew prefix (user-owned)
+  else
+    INSTALL_DIR="$HOME/.local/bin"
+  fi
+fi
+mkdir -p "$INSTALL_DIR"
+
+echo "Installing binaries to $INSTALL_DIR..."
+cp .build/release/notch "$INSTALL_DIR/notch"
+cp .build/release/NotchNotifyApp "$INSTALL_DIR/NotchNotifyApp"
+chmod 755 "$INSTALL_DIR/notch" "$INSTALL_DIR/NotchNotifyApp"
+
+echo "Re-signing installed binaries (adhoc)..."
+codesign --force --sign - "$INSTALL_DIR/notch"
+codesign --force --sign - "$INSTALL_DIR/NotchNotifyApp"
+
+case ":$PATH:" in
+  *":$INSTALL_DIR:"*) ;;
+  *) echo "WARNING: $INSTALL_DIR is not in PATH. Add it to use 'notch' directly." ;;
+esac
 
 echo "Sending showoff notifications (server auto-starts on first use)..."
 
