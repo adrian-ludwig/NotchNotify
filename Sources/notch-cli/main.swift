@@ -31,6 +31,7 @@ struct CLI {
         var timeout: Double?
         var style: String?
         var accent: String?
+        var noWait = false
 
         while !args.isEmpty {
             let flag = args.removeFirst()
@@ -58,6 +59,8 @@ struct CLI {
                 guard let v = next(flag) else { return 3 }; style = v
             case "--accent":
                 guard let v = next(flag) else { return 3 }; accent = v
+            case "--no-wait", "-n":
+                noWait = true
             case "--help", "-h":
                 printUsage(); return 0
             default:
@@ -78,6 +81,13 @@ struct CLI {
         )
 
         ensureServerRunning()
+
+        // Fire-and-forget: write the request, let the server present and
+        // auto-dismiss on its own timer, and exit without blocking on a
+        // response. Used for passive notifications that have no actions.
+        if noWait {
+            return sendNoWait(req) ? 0 : 3
+        }
 
         guard let response = send(req) else {
             FileHandle.standardError.write(Data("Could not reach NotchNotify app.\n".utf8))
@@ -153,10 +163,11 @@ struct CLI {
         }
     }
 
-    static func send(_ request: NotifyRequest) -> NotifyResponse? {
+    /// Opens a connected client socket to the NotchNotify server, or nil on
+    /// failure. Caller owns the fd and must close it.
+    static func connectToServer() -> Int32? {
         let fd = socket(AF_UNIX, SOCK_STREAM, 0)
         guard fd >= 0 else { return nil }
-        defer { close(fd) }
 
         var addr = sockaddr_un()
         addr.sun_family = sa_family_t(AF_UNIX)
@@ -173,12 +184,24 @@ struct CLI {
         let ok = withUnsafePointer(to: &addr) {
             $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { Darwin.connect(fd, $0, len) }
         }
-        guard ok == 0 else { return nil }
+        guard ok == 0 else { close(fd); return nil }
+        return fd
+    }
 
-        guard var payload = try? JSONEncoder().encode(request) else { return nil }
+    /// Encodes the request as a newline-terminated JSON line and writes it to
+    /// the socket. Returns false if the full payload could not be sent.
+    static func writeRequest(_ request: NotifyRequest, fd: Int32) -> Bool {
+        guard var payload = try? JSONEncoder().encode(request) else { return false }
         payload.append(0x0A)
         let wrote = payload.withUnsafeBytes { write(fd, $0.baseAddress, $0.count) }
-        guard wrote == payload.count else { return nil }
+        return wrote == payload.count
+    }
+
+    static func send(_ request: NotifyRequest) -> NotifyResponse? {
+        guard let fd = connectToServer() else { return nil }
+        defer { close(fd) }
+
+        guard writeRequest(request, fd: fd) else { return nil }
 
         var buffer = Data()
         var byte: UInt8 = 0
@@ -187,6 +210,16 @@ struct CLI {
             buffer.append(byte)
         }
         return try? JSONDecoder().decode(NotifyResponse.self, from: buffer)
+    }
+
+    /// Sends the request without waiting for a response. The server presents
+    /// the notification and auto-dismisses it on its own timer, so closing the
+    /// connection early does not affect display. Returns false only if the
+    /// request could not be delivered to the server.
+    static func sendNoWait(_ request: NotifyRequest) -> Bool {
+        guard let fd = connectToServer() else { return false }
+        defer { close(fd) }
+        return writeRequest(request, fd: fd)
     }
 
     static func printUsage() {
@@ -204,6 +237,7 @@ struct CLI {
           -t, --timeout SECS      Auto-dismiss after N seconds
               --style glass|solid Visual style (default: glass)
               --accent #RRGGBB    Primary button color
+          -n, --no-wait           Fire and exit without waiting for a response
           -h, --help              Show this help
 
         EXAMPLES:
