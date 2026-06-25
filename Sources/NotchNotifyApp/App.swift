@@ -324,12 +324,20 @@ final class NotchWindow: NSPanel {
             notchMode: notchMode,
             targetScreenHasNotch: targetScreenHasNotch,
             onAction: { [weak self] action in self?.finish(action: action, dismissed: false) },
-            onDismiss: { [weak self] in self?.finish(action: nil, dismissed: true) }
+            onDismiss: { [weak self] in self?.finish(action: nil, dismissed: true) },
+            onSize: { [weak self] size in self?.fitToContent(size) }
         )
-        let hostingView = NSHostingView(rootView: content)
+        let hostingView = CardHostingView(rootView: content)
         hostingView.wantsLayer = true
         hostingView.layer?.backgroundColor = .clear
         self.contentView = hostingView
+    }
+
+    /// Report the live SwiftUI content size to the hosting view so it can passthrough
+    /// clicks landing outside the actual card (the panel stays a fixed 520×320 so slide
+    /// animations have room to render; only the dead zone around the card is click-through).
+    func fitToContent(_ size: CGSize) {
+        (contentView as? CardHostingView)?.contentSize = size
     }
 
     override var canBecomeKey: Bool { true }
@@ -424,6 +432,24 @@ final class NotchWindow: NSPanel {
     }
 }
 
+/// Hosting view that passes clicks through the transparent dead zone around the card.
+/// `contentSize` is the live SwiftUI content size (top-center anchored in the panel);
+/// points outside that rect return nil so apps below receive the click, while buttons
+/// inside it hit-test normally. The panel itself stays fixed so animations have room.
+final class CardHostingView: NSHostingView<NotchView> {
+    var contentSize: CGSize = .zero
+
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        guard contentSize.width > 1, contentSize.height > 1 else { return super.hitTest(point) }
+        let b = bounds
+        let cw = min(contentSize.width, b.width)
+        let ch = min(contentSize.height, b.height)
+        // Content is anchored top-center; top edge is bounds.maxY (view is not flipped).
+        let rect = NSRect(x: (b.width - cw) / 2, y: b.maxY - ch, width: cw, height: ch)
+        return rect.contains(point) ? super.hitTest(point) : nil
+    }
+}
+
 // MARK: - SwiftUI card
 
 struct NotchView: View {
@@ -434,6 +460,7 @@ struct NotchView: View {
     let targetScreenHasNotch: Bool
     let onAction: (String) -> Void
     let onDismiss: () -> Void
+    let onSize: (CGSize) -> Void
 
     private var hasRealNotch: Bool {
         EffectiveNotchMode.resolve(notchMode: notchMode, targetScreenHasNotch: targetScreenHasNotch)
@@ -473,6 +500,7 @@ struct NotchView: View {
                 popoverLayout
             }
         }
+        .onGeometryChange(for: CGSize.self) { $0.size } action: { onSize($0) }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
     }
 
@@ -488,7 +516,7 @@ struct NotchView: View {
                             .transition(.opacity.combined(with: .offset(y: -10)))
                     }
                 }
-                .offset(y: notchHeight - capsuleOverlap)
+                .padding(.top, notchHeight - capsuleOverlap)
                 .transition(.asymmetric(
                     insertion: .offset(y: -notchHeight).combined(with: .opacity),
                     removal: .offset(y: -notchHeight).combined(with: .opacity)
