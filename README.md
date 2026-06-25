@@ -5,7 +5,7 @@ Screen-recording-invisible notifications for macOS that live around the notch. C
 - **Invisible to screen recording / screen sharing** — uses `NSWindowSharingNone`, excluded from QuickTime, Zoom, Meet, ScreenCaptureKit.
 - **No notification permission** — draws its own floating window, never touches `UNUserNotificationCenter`.
 - **Floats above everything** — shows over fullscreen apps, all Spaces, never steals focus.
-- **Rich content** — image (file path or SF Symbol), title, subtitle, body, action buttons.
+- **Rich content** — image (emoji, local file, `https://` URL, or SF Symbol), title, subtitle, body, action buttons.
 - **Fast keyboard actions** — `Return` = primary, `Esc` = dismiss.
 - **Dynamic Island animation** — capsule expands from the notch, card slides from under it; thin pill on non-notched displays.
 - **Queue with live indicators** — concurrent requests queue FIFO; white badge on the capsule and/or a glass bar under the card show how many are waiting.
@@ -25,16 +25,23 @@ Produces two binaries in `.build/release/`:
 
 ## Install
 
-One-shot script: build, stop any running app, install both binaries to `/usr/local/bin`, run a showoff reel (including a 4-notification queue demo):
+One-shot script: build, stop any running app, install both binaries to a **user-owned** directory, adhoc re-sign them, then run a showoff reel (including a 4-notification queue demo):
 
 ```bash
 ./install.sh
 ```
 
-Manual equivalent:
+Install dir is picked in this order: `$NOTCH_INSTALL_DIR` → `/opt/homebrew/bin` (if writable) → `~/.local/bin`.
 
 ```bash
-sudo cp .build/release/notch .build/release/NotchNotifyApp /usr/local/bin/
+NOTCH_INSTALL_DIR=~/bin ./install.sh   # override
+```
+
+**Don't `sudo cp` into `/usr/local/bin`.** `swift build` emits an *adhoc, linker-signed* binary the kernel only honors at its original build path; copying it to a root-owned path makes macOS reject the launch with `Taskgated Invalid Signature` (SIGKILL). `install.sh` sidesteps this by copying to a user-owned dir and re-signing (`codesign --force --sign -`). Manual equivalent:
+
+```bash
+cp .build/release/notch .build/release/NotchNotifyApp ~/.local/bin/
+codesign --force --sign - ~/.local/bin/notch ~/.local/bin/NotchNotifyApp
 notch "Hello" -s "from NotchNotify" -b "It works!" -a OK,Cancel -t 10
 ```
 
@@ -49,22 +56,75 @@ notch "Title" [options]
 
   -s, --subtitle TEXT       Small secondary line
   -b, --body TEXT           Longer description
-  -i, --image VALUE         Image path OR "sf:symbol.name" for an SF Symbol
+  -i, --image VALUE         Emoji, file path, https:// URL, or "sf:symbol.name"
   -a, --actions A,B,C       Action buttons (first one is "primary")
   -t, --timeout SECS        Auto-dismiss after N seconds
       --style glass|solid   Visual style (default: glass)
       --accent #RRGGBB      Primary button color
+  -n, --no-wait             Fire and exit immediately; don't wait for a response
 ```
 
 Stdout is one JSON line: `{"action":"Accept","dismissed":false}`
 
 Exit codes: `0` = first action, `1` = any other action, `2` = dismissed, `3` = error.
+With `--no-wait` the CLI exits `0` as soon as the request is delivered (`3` if the server is unreachable) and prints nothing — use it for passive, action-less toasts that auto-dismiss on their own timer.
 
 ### Environment
 
 - `NOTCH_QUEUE_STYLE` = `bar` | `badge` | `both` | `none` — picks how the pending-queue depth is displayed while a notification is visible. Default `both`. `badge` is automatically hidden on displays without a real notch. Read once by the server on launch; restart the app to change it.
 - `NOTCH_FORCE` = `on` | `off` | `auto` — overrides notch detection. `on` forces the black capsule + badge even on non-notched displays (uses a 180×32 fallback when no real notch geometry is available); `off` forces the thin glass pill on every display. Default `auto` (detects from the chosen target display, not from all connected displays).
 - `NOTCH_SCREEN_TARGET` = `main` | `notch` — picks which display the notification window attaches to. Default `main`. `notch` restores the old behavior of preferring a notched display first. Read once by the server on launch; restart the app to change it.
+
+## Compositions
+
+Every card has a thumbnail (left) and a title (required). Everything else is optional and stacks. The tables below cover every combination the renderer supports.
+
+### Content layout
+
+`title` and the thumbnail always render. `subtitle`, `body`, and `actions` are independent — mix freely.
+
+| subtitle | body | actions | Looks like | Command |
+|:--------:|:----:|:-------:|------------|---------|
+| – | – | – | bare toast | `notch "Build complete"` |
+| ✓ | – | – | toast + context line | `notch "Deploy ready" -s "main · prod"` |
+| – | ✓ | – | toast + paragraph | `notch "Heads up" -b "Backfill finished."` |
+| ✓ | ✓ | – | full text card | `notch "New DM" -s "Alice" -b "you around?"` |
+| – | – | 1 | one-tap confirm | `notch "Continue?" -a OK` |
+| ✓/✓ | – | 2 | yes/no prompt | `notch "Run tests?" -s "pre-commit" -a Yes,No` |
+| ✓ | ✓ | 3+ | rich prompt | `notch "Installed" -s "v2" -b "Ready." -a Nice,Docs,Close` |
+
+First action is primary (accent-tinted, `Return`); `Esc` / close button dismisses. Action result comes back on stdout + exit code (unless `--no-wait`).
+
+### Thumbnail source (`-i`)
+
+| Value | Renders |
+|-------|---------|
+| `🚀` (any emoji) | the emoji glyph |
+| `sf:bell.badge.fill` | SF Symbol, tinted with `--accent` |
+| `~/avatars/alice.png`, `/abs/img.jpg` | local image file |
+| `https://example.com/img.png` | remote image (async-loaded) |
+| omitted / load fails | `sparkles` fallback glyph |
+
+### Modifiers (orthogonal — combine with any layout)
+
+| Flag / env | Effect |
+|------------|--------|
+| `-t SECS` | auto-dismiss after N seconds |
+| `--style glass\|solid` | translucent liquid glass (default) vs. darker solid fill |
+| `--accent #RRGGBB` | primary-button + SF-symbol tint |
+| `-n, --no-wait` | fire-and-forget; exit `0` immediately, no response |
+| `NOTCH_QUEUE_STYLE=bar\|badge\|both\|none` | how queued-notification depth is shown |
+| `NOTCH_FORCE=on\|off\|auto` | force capsule / pill / auto-detect |
+| `NOTCH_SCREEN_TARGET=main\|notch` | which display to attach to |
+
+### Display variants (automatic)
+
+| Display | Presentation |
+|---------|--------------|
+| Notched Mac | black capsule expands from the notch, card slides under it; queue **badge** sits inside the capsule |
+| Non-notched | thin glass **pill** stands in for the capsule; queue shown as a **bar** under the card |
+
+Concurrent `notch` calls queue FIFO — the first shows, the rest wait, and the live badge/bar counts how many are pending.
 
 ## Examples
 
