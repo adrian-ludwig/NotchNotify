@@ -31,9 +31,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let menu = NSMenu()
         menu.addItem(withTitle: "Test Notification", action: #selector(testNotify), keyEquivalent: "t")
         menu.addItem(NSMenuItem.separator())
+        captureItem = NSMenuItem(title: "Show in Screenshots & Recordings",
+                                 action: #selector(toggleCaptureVisibility), keyEquivalent: "")
+        menu.addItem(captureItem)
+        menu.addItem(NSMenuItem.separator())
         menu.addItem(withTitle: "Quit NotchNotify", action: #selector(quit), keyEquivalent: "q")
         menu.items.forEach { $0.target = self }
         statusItem.menu = menu
+        syncCaptureItem()
+    }
+
+    private var captureItem: NSMenuItem!
+
+    @objc func toggleCaptureVisibility() {
+        presenter.captureVisibility = presenter.captureVisibility.toggled
+        syncCaptureItem()
+    }
+
+    private func syncCaptureItem() {
+        captureItem.state = presenter.captureVisibility == .visible ? .on : .off
     }
 
     @objc func testNotify() {
@@ -230,6 +246,14 @@ final class NotchPresenter {
     private let queueStyle: QueueStyle = QueueStyle.fromEnv()
     private let notchMode: NotchMode = NotchMode.fromEnv()
 
+    /// Persisted user choice; applied to the live window immediately and to every new one.
+    var captureVisibility: CaptureVisibility = CaptureVisibility.load() {
+        didSet {
+            captureVisibility.save()
+            currentWindow?.sharingType = captureVisibility.sharingType
+        }
+    }
+
     func present(_ request: NotifyRequest, completion: @escaping (NotifyResponse) -> Void) {
         if let window = currentWindow {
             queue.append(Pending(request: request, completion: completion))
@@ -244,7 +268,8 @@ final class NotchPresenter {
             request: request,
             queueStyle: queueStyle,
             notchMode: notchMode,
-            initialQueueDepth: queue.count
+            initialQueueDepth: queue.count,
+            captureVisibility: captureVisibility
         ) { [weak self] response in
             completion(response)
             guard let self else { return }
@@ -261,7 +286,7 @@ final class NotchPresenter {
 
 // MARK: - Notch window
 // Borderless, transparent, floating panel pinned to top-center of the main screen.
-// Critical: sharingType = .none makes this invisible to screen recording.
+// sharingType follows CaptureVisibility: .none hides it from screenshots and recordings.
 
 final class NotchAnim: ObservableObject {
     @Published var capsuleExpanded = false
@@ -285,6 +310,7 @@ final class NotchWindow: NSPanel {
         queueStyle: QueueStyle,
         notchMode: NotchMode,
         initialQueueDepth: Int,
+        captureVisibility: CaptureVisibility,
         completion: @escaping (NotifyResponse) -> Void
     ) {
         self.request = request
@@ -311,8 +337,11 @@ final class NotchWindow: NSPanel {
         self.hasShadow = false
         self.level = .screenSaver
         self.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary]
-        self.ignoresMouseEvents = false
-        self.sharingType = .none
+        // Start click-through; the cursor tracker flips this on only while the
+        // pointer is over the card. Returning nil from hitTest is not enough:
+        // AppKit still routes the click to this window and swallows it.
+        self.ignoresMouseEvents = true
+        self.sharingType = captureVisibility.sharingType
         self.hidesOnDeactivate = false
         self.isMovable = false
         self.becomesKeyOnlyIfNeeded = true
@@ -347,9 +376,28 @@ final class NotchWindow: NSPanel {
         EffectiveNotchMode.resolve(notchMode: notchMode, targetScreenHasNotch: targetScreenHasNotch)
     }
 
+    private var cursorTracker: Timer?
+
+    /// Poll the cursor and make the panel accept events only over the card.
+    /// Polling needs no Accessibility permission, unlike global event monitors.
+    private func startCursorTracking() {
+        cursorTracker = Timer.scheduledTimer(withTimeInterval: 1.0 / 30.0, repeats: true) { [weak self] _ in
+            self?.updateMousePassthrough()
+        }
+        cursorTracker?.tolerance = 0.01
+    }
+
+    private func updateMousePassthrough() {
+        guard let host = contentView as? CardHostingView else { return }
+        let local = host.convert(convertPoint(fromScreen: NSEvent.mouseLocation), from: nil)
+        let over = ContentHitRegion.contains(local, bounds: host.bounds, contentSize: host.contentSize, flipped: host.isFlipped)
+        if ignoresMouseEvents == over { ignoresMouseEvents = !over }
+    }
+
     func show() {
         self.alphaValue = 1
         self.orderFrontRegardless()
+        startCursorTracking()
 
         if effectiveHasNotch {
             withAnimation(.spring(response: 0.38, dampingFraction: 0.78)) {
@@ -401,6 +449,8 @@ final class NotchWindow: NSPanel {
         guard !didComplete else { return }
         didComplete = true
         dismissTimer?.invalidate()
+        cursorTracker?.invalidate()
+        ignoresMouseEvents = true
         let response = NotifyResponse(action: action, dismissed: dismissed)
 
         withAnimation(.easeIn(duration: 0.08)) {
@@ -439,14 +489,15 @@ final class NotchWindow: NSPanel {
 final class CardHostingView: NSHostingView<NotchView> {
     var contentSize: CGSize = .zero
 
+    /// `point` arrives in the superview's (unflipped) coordinates; convert to our own
+    /// flipped space before testing against the content rect.
     override func hitTest(_ point: NSPoint) -> NSView? {
-        guard contentSize.width > 1, contentSize.height > 1 else { return super.hitTest(point) }
-        let b = bounds
-        let cw = min(contentSize.width, b.width)
-        let ch = min(contentSize.height, b.height)
-        // Content is anchored top-center; top edge is bounds.maxY (view is not flipped).
-        let rect = NSRect(x: (b.width - cw) / 2, y: b.maxY - ch, width: cw, height: ch)
-        return rect.contains(point) ? super.hitTest(point) : nil
+        guard ContentHitRegion.rect(bounds: bounds, contentSize: contentSize, flipped: isFlipped) != nil else {
+            return super.hitTest(point)
+        }
+        let local = convert(point, from: superview)
+        return ContentHitRegion.contains(local, bounds: bounds, contentSize: contentSize, flipped: isFlipped)
+            ? super.hitTest(point) : nil
     }
 }
 
@@ -600,6 +651,7 @@ struct NotchView: View {
             .buttonStyle(.glass)
             .clipShape(Circle())
             .keyboardShortcut(.escape, modifiers: [])
+            .pointerCursor()
         }
         .padding(16)
         .glassEffect(.regular, in: UnevenRoundedRectangle(
@@ -824,10 +876,20 @@ struct ActionButton: View {
                 }
         }
         .buttonStyle(.plain)
+        .pointerCursor()
     }
 }
 
 // MARK: - Helpers
+
+extension View {
+    /// Show the pointing-hand cursor while hovering; macOS buttons keep the arrow by default.
+    func pointerCursor() -> some View {
+        onHover { inside in
+            if inside { NSCursor.pointingHand.push() } else { NSCursor.pop() }
+        }
+    }
+}
 
 extension Color {
     init?(hex: String) {

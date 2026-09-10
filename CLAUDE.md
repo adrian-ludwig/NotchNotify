@@ -50,7 +50,7 @@ Unix domain socket at `~/.config/NotchNotify/connect.socket` (mode `0600`). Wire
 
 ### Notification window (`App.swift`)
 
-`NotchWindow` is a borderless `NSPanel` at `.screenSaver` level, `sharingType = .none` (invisible to screen recording). `NSHostingView` hosts `NotchView`. Window frame `520×320`, pinned top-center of the target display. Default target is `NSScreen.main`; `NOTCH_SCREEN_TARGET=notch` prefers a notched display first.
+`NotchWindow` is a borderless `NSPanel` at `.screenSaver` level. `sharingType` comes from `CaptureVisibility` (`CaptureVisibility.swift`), a persisted `UserDefaults` toggle exposed in the menu bar as "Show in Screenshots & Recordings" (default off = `.none`, hidden from both; macOS gates screenshots and recordings with the same property, so they cannot be split). `NSHostingView` hosts `NotchView`. Window frame `520×320`, pinned top-center of the target display. Default target is `NSScreen.main`; `NOTCH_SCREEN_TARGET=notch` prefers a notched display first.
 
 Visual stack (macOS 26 Tahoe):
 - Outermost: `GlassEffectContainer` (required for `glassEffect` to render)
@@ -58,6 +58,10 @@ Visual stack (macOS 26 Tahoe):
 - Icon box: `.glassEffect(.regular, in: RoundedRectangle(cornerRadius: 13))`
 - Buttons: `.buttonStyle(.glass)` / `.buttonStyle(.glassProminent)` with `.tint(accent)`
 - Text: `.primary` / `.secondary` (vibrancy-adaptive — do NOT use hardcoded `.white`)
+
+### Click-through
+
+The panel is a fixed 520×320 canvas; only the live SwiftUI content rect (top-center anchored, reported via `onGeometryChange` → `fitToContent`) is interactive. `ContentHitRegion` (pure, unit-tested) computes that rect. `NotchWindow` starts with `ignoresMouseEvents = true` and a 30 Hz cursor poll (`updateMousePassthrough`) flips it off only while the cursor is over the content. Returning `nil` from `hitTest` alone is NOT enough — AppKit still routes the click to the panel and swallows it.
 
 ### Capsule + animation
 
