@@ -61,10 +61,15 @@ notch "Title" [options]
   -t, --timeout SECS        Auto-dismiss after N seconds
       --style glass|solid   Visual style (default: glass)
       --accent #RRGGBB      Primary button color
+      --open-url URL        Open this http(s) URL when the first action is clicked
   -n, --no-wait             Fire and exit immediately; don't wait for a response
 ```
 
-Stdout is one JSON line: `{"action":"Accept","dismissed":false}`
+Stdout is one JSON line: `{"action":"Accept","dismissed":false,"clickedAt":"2026-11-08T09:15:02Z"}`
+
+- `clickedAt` is the ISO-8601 time of the click. It is absent when the notification was dismissed or timed out (`{"dismissed":true}`).
+- `--open-url URL` sends a `url` field with the request. When the user clicks the **first** action, the app opens the URL itself (default browser), and the CLI still reports the click and exits `0`. Other actions and dismissal open nothing. The URL must parse with an `http` or `https` scheme; anything else exits `3` before contacting the app.
+- Both fields are optional on the wire, so an older CLI works with a newer app and vice versa: an older app ignores `url`, and an older CLI ignores `clickedAt`.
 
 Exit codes: `0` = first action, `1` = any other action, `2` = dismissed, `3` = error.
 With `--no-wait` the CLI exits `0` as soon as the request is delivered (`3` if the server is unreachable) and prints nothing — use it for passive, action-less toasts that auto-dismiss on their own timer.
@@ -112,6 +117,7 @@ First action is primary (accent-tinted, `Return`); `Esc` / close button dismisse
 | `-t SECS` | auto-dismiss after N seconds |
 | `--style glass\|solid` | translucent liquid glass (default) vs. darker solid fill |
 | `--accent #RRGGBB` | primary-button + SF-symbol tint |
+| `--open-url URL` | app opens the http(s) URL when the first action is clicked |
 | `-n, --no-wait` | fire-and-forget; exit `0` immediately, no response |
 | `NOTCH_QUEUE_STYLE=bar\|badge\|both\|none` | how queued-notification depth is shown |
 | `NOTCH_FORCE=on\|off\|auto` | force capsule / pill / auto-detect |
@@ -143,6 +149,9 @@ notch "Deploy ready?" \
 
 # DM-style with avatar
 notch "Alice" -s "direct message" -i ~/avatars/alice.png -b "you around?" -a Reply,Later
+
+# Open a link when the primary button is clicked
+notch "PR #42 ready for review" -a "Open PR,Later" --open-url https://github.com/org/repo/pull/42
 
 # Use from a shell script
 response=$(notch "Run tests?" -a Yes,No -t 30)
