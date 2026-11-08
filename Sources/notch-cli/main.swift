@@ -6,7 +6,7 @@ import Darwin
 //        [--subtitle "Subtitle"] [--body "Longer description"]
 //        [--image PATH | sf:symbol.name]
 //        [--actions A,B,C] [--timeout SECS] [--style glass|solid]
-//        [--accent #RRGGBB]
+//        [--accent #RRGGBB] [--open-url URL]
 //
 // Exit codes:
 //   0  first action clicked
@@ -31,6 +31,7 @@ struct CLI {
         var timeout: Double?
         var style: String?
         var accent: String?
+        var openURL: String?
         var noWait = false
 
         while !args.isEmpty {
@@ -59,6 +60,13 @@ struct CLI {
                 guard let v = next(flag) else { return 3 }; style = v
             case "--accent":
                 guard let v = next(flag) else { return 3 }; accent = v
+            case "--open-url":
+                guard let v = next(flag) else { return 3 }
+                guard OpenURL.parse(v) != nil else {
+                    FileHandle.standardError.write(Data("Invalid --open-url (need an http or https URL): \(v)\n".utf8))
+                    return 3
+                }
+                openURL = v
             case "--no-wait", "-n":
                 noWait = true
             case "--help", "-h":
@@ -77,7 +85,8 @@ struct CLI {
             actions: actions,
             timeout: timeout,
             style: style,
-            accentHex: accent
+            accentHex: accent,
+            url: openURL
         )
 
         ensureServerRunning()
@@ -237,6 +246,7 @@ struct CLI {
           -t, --timeout SECS      Auto-dismiss after N seconds
               --style glass|solid Visual style (default: glass)
               --accent #RRGGBB    Primary button color
+              --open-url URL      Open this http(s) URL when the first action is clicked
           -n, --no-wait           Fire and exit without waiting for a response
           -h, --help              Show this help
 
@@ -245,6 +255,7 @@ struct CLI {
           notch "Deploy ready" -s "main branch" -b "Push to prod?" -a Deploy,Cancel
           notch "New DM" -i ~/avatars/alice.png -b "hey, you around?" -a Reply,Later
           notch "Agent" -i sf:sparkles -b "Run tests before commit?" -a Yes,No -t 30
+          notch "PR #42 ready" -a "Open PR,Later" --open-url https://github.com/org/repo/pull/42
 
         EXIT CODES:
           0 first action, 1 other action, 2 dismissed, 3 error

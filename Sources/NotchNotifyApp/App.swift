@@ -451,7 +451,10 @@ final class NotchWindow: NSPanel {
         dismissTimer?.invalidate()
         cursorTracker?.invalidate()
         ignoresMouseEvents = true
-        let response = NotifyResponse(action: action, dismissed: dismissed)
+        let response = ActionOutcome.response(action: action, dismissed: dismissed, at: Date())
+        if let url = ActionOutcome.urlToOpen(for: request, action: action) {
+            NSWorkspace.shared.open(url)
+        }
 
         withAnimation(.easeIn(duration: 0.08)) {
             anim.queueVisible = false
